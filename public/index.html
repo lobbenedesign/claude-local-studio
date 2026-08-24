@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CUSTOM CLAUDE CODER — Terminal Agent & Free Providers Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-logo">
+          <!-- Authentic Claude Apricot Spark -->
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z" fill="#da7756"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">CUSTOM CLAUDE CODER</span>
+          <span class="brand-version">v2.1.888</span>
+        </div>
+      </div>
+
+      <!-- Attached Workspace Directory Pill -->
+      <div class="header-workspace-badge" id="header-attached-folder" title="Cartella di lavoro attualmente allegata">
+        <span class="folder-icon">📂</span>
+        <span class="folder-label" id="header-folder-name">LLM</span>
+        <button class="btn-change-folder" id="btn-browse-folder" title="Sfoglia e cambia cartella dal PC/Mac">Sfoglia ▾</button>
+      </div>
+
+      <!-- Status Indicators -->
+      <div class="header-status">
+        <div class="status-pill active-model-pill">
+          <span class="pill-dot green"></span>
+          <span class="status-label">Modello:</span>
+          <select id="quick-model-select" class="quick-model-dropdown">
+            <optgroup label="⚡ Modelli Locali (Ollama)" id="optgroup-local">
+              <option value="qwen2.5-coder:7b">qwen2.5-coder:7b</option>
+            </optgroup>
+            <optgroup label="⚡ Cerebras Cloud (Record ~1800 tok/s)" id="optgroup-cerebras">
+              <option value="cerebras/llama-3.3-70b">Llama 3.3 70B (Cerebras ~1800 tok/s)</option>
+              <option value="cerebras/llama3.1-8b">Llama 3.1 8B (Cerebras ~2200 tok/s)</option>
+            </optgroup>
+            <optgroup label="🧠 SambaNova Cloud (671B MoE Free)" id="optgroup-sambanova">
+              <option value="sambanova/DeepSeek-R1">DeepSeek R1 671B (SambaNova)</option>
+              <option value="sambanova/Meta-Llama-3.3-70B-Instruct">Llama 3.3 70B (SambaNova)</option>
+              <option value="sambanova/Qwen2.5-Coder-32B-Instruct">Qwen 2.5 Coder 32B (SambaNova)</option>
+            </optgroup>
+            <optgroup label="🎯 Mistral AI (Codestral 256k)" id="optgroup-mistral">
+              <option value="mistral/codestral-latest">Codestral Latest 22B (Mistral)</option>
+              <option value="mistral/mistral-small-latest">Mistral Small (Mistral)</option>
+            </optgroup>
+            <optgroup label="🚀 Groq Cloud (Free Tier ~400 tok/s)" id="optgroup-groq">
+              <option value="groq/llama-3.3-70b-versatile">Llama 3.3 70B (Groq)</option>
+              <option value="groq/deepseek-r1-distill-llama-70b">DeepSeek R1 70B (Groq)</option>
+              <option value="groq/qwen-2.5-coder-32b">Qwen 2.5 Coder 32B (Groq)</option>
+            </optgroup>
+            <optgroup label="🌐 OpenRouter (100% Free :free)" id="optgroup-openrouter">
+              <option value="openrouter/deepseek/deepseek-r1:free">DeepSeek R1 671B (:free)</option>
+              <option value="openrouter/meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B (:free)</option>
+              <option value="openrouter/qwen/qwen-2.5-coder-32b-instruct:free">Qwen 2.5 Coder 32B (:free)</option>
+            </optgroup>
+            <optgroup label="✨ Google Gemini API" id="optgroup-gemini">
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro (2M Ctx)</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash (1M Ctx)</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <div class="status-pill cost-pill">
+          <span class="pill-icon">💰</span>
+          <span class="status-label">Costo: <strong>$0.00</strong></span>
+          <span class="savings-tag" id="savings-tag">100% Free</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Navigation Bar -->
+    <nav class="app-nav">
+      <button class="nav-tab active" data-tab="workspace" onclick="switchTab('workspace')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="4 17 10 11 4 5"></polyline>
+          <line x1="12" y1="19" x2="20" y2="19"></line>
+        </svg>
+        Terminal & Agent
+      </button>
+
+      <button class="nav-tab" data-tab="models" onclick="switchTab('models')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+          <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+          <line x1="6" y1="6" x2="6.01" y2="6"></line>
+          <line x1="6" y1="18" x2="6.01" y2="18"></line>
+        </svg>
+        Model Hub & Free Providers
+      </button>
+
+      <button class="nav-tab" data-tab="explorer" onclick="switchTab('explorer')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+        File Tree & Code Diff
+      </button>
+
+      <button class="nav-tab" data-tab="stats" onclick="switchTab('stats')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="20" x2="18" y2="10"></line>
+          <line x1="12" y1="20" x2="12" y2="4"></line>
+          <line x1="6" y1="20" x2="6" y2="14"></line>
+        </svg>
+        Telemetry & Savings
+      </button>
+
+      <button class="nav-tab" data-tab="settings" onclick="switchTab('settings')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        API Keys & Free Providers
+      </button>
+
+      <button class="nav-tab" data-tab="cmux" onclick="switchTab('cmux')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+          <line x1="8" y1="21" x2="16" y2="21"></line>
+          <line x1="12" y1="17" x2="12" y2="21"></line>
+        </svg>
+        Dev Servers (cmux)
+      </button>
+
+      <button class="nav-tab" data-tab="mcp" onclick="switchTab('mcp')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+        </svg>
+        MCP Servers Hub
+      </button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="app-main">
+
+      <!-- TAB 1: WORKSPACE & TERMINAL CONSOLE -->
+      <section id="tab-workspace" class="tab-pane active">
+        <div class="workspace-layout">
+          <!-- Sidebar -->
+          <div class="workspace-sidebar">
+            <div class="card project-summary-card">
+              <div class="card-header-row">
+                <div>
+                  <div class="project-tag">Workspace Attivo</div>
+                  <h3 class="project-title" id="sidebar-project-title">LLM</h3>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="btn-reselect-folder">📁 Cambia</button>
+              </div>
+              <div class="project-path-text" id="sidebar-project-path">/Users/giuseppelobbene/Desktop/APP PYTHON - FLUTTER ARCHIVE/LLM</div>
+              
+              <div class="project-meta-chips">
+                <span class="chip-info" id="chip-files-count">... file</span>
+                <span class="chip-info" id="chip-framework">Scanning...</span>
+                <span class="chip-info" id="chip-rules-status">📜 .cursorrules</span>
+                <span class="chip-info" id="chip-memory-status" style="cursor: pointer;" title="Memoria Gerarchica AgentDB (Letta/MemGPT) - Clicca per ispezionare" onclick="window.openMemoryModal ? window.openMemoryModal() : null">🧠 0 Ricordi</span>
+                <span class="chip-info" id="chip-repo-map" style="cursor: pointer;" title="AST Repo Map: Simboli e Firme estratti da Aider (Clicca per ispezionare)" onclick="window.openAstModal ? window.openAstModal() : null">🗺️ ... simboli</span>
+                <span class="chip-info chip-provider" id="chip-active-provider">⚡ Local Ollama</span>
+              </div>
+
+              <!-- Quick Action Buttons for Cursor & Project Rules -->
+              <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 8px;">
+                <button class="btn btn-secondary btn-sm" id="btn-edit-rules" style="width: 100%; justify-content: center; font-size: 11.5px;">
+                  📜 Regole Progetto (.cursorrules / CLAUDE.md)
+                </button>
+                <div style="display: flex; gap: 6px;">
+                  <button class="btn btn-secondary btn-sm" id="btn-open-cursor" style="flex: 1; justify-content: center; font-size: 11px;" title="Apri cartella corrente in Cursor IDE">
+                    ⚡ Cursor
+                  </button>
+                  <button class="btn btn-secondary btn-sm" id="btn-open-vscode" style="flex: 1; justify-content: center; font-size: 11px;" title="Apri cartella corrente in VS Code">
+                    💻 VS Code
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Interactive File Tree -->
+            <div class="card file-tree-card">
+              <div class="file-tree-header">
+                <h4 class="tree-title">File nel Workspace</h4>
+                <button class="btn-icon" id="btn-refresh-tree" title="Aggiorna albero file">🔄</button>
+              </div>
+              <div class="file-tree-container" id="file-tree-container">
+                <div class="tree-loading">Caricamento struttura file...</div>
+              </div>
+            </div>
+
+            <!-- Claude Slash Commands Box -->
+            <div class="card">
+              <h3 class="card-title">Comandi Rapidi (Slash Commands)</h3>
+              <div class="slash-commands-list">
+                <div class="slash-item" onclick="sendQuickPrompt('/swarm Implementa il modulo principale con architettura pulita')">
+                  <span class="slash-cmd">/swarm</span>
+                  <span class="slash-desc">Swarm Multi-Agente (Ruflo)</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/diagram Genera il diagramma architetturale di questo progetto con flussi dati')">
+                  <span class="slash-cmd">/diagram</span>
+                  <span class="slash-desc">🎨 Diagramma Mermaid (MetaGPT)</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/prd Genera il Product Requirement Document per la nuova funzionalità')">
+                  <span class="slash-cmd">/prd</span>
+                  <span class="slash-desc">🏢 Product Spec PRD (MetaGPT)</span>
+                </div>
+                <div class="slash-item" onclick="window.openAutoDebugModal ? window.openAutoDebugModal() : sendQuickPrompt('/autofix')">
+                  <span class="slash-cmd">/autofix</span>
+                  <span class="slash-desc">Auto-debug & test loop</span>
+                </div>
+                <div class="slash-item" onclick="window.runSmartGitCommit ? window.runSmartGitCommit() : sendQuickPrompt('/commit')">
+                  <span class="slash-cmd">/commit</span>
+                  <span class="slash-desc">⚡ Smart Git Commit & Diff</span>
+                </div>
+                <div class="slash-item" onclick="window.runSecurityScan ? window.runSecurityScan() : sendQuickPrompt('/secscan')">
+                  <span class="slash-cmd">/secscan</span>
+                  <span class="slash-desc">🛡️ Audit Segreti & Token Leak</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/review')">
+                  <span class="slash-cmd">/review</span>
+                  <span class="slash-desc">Code review & bug search</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/refactor')">
+                  <span class="slash-cmd">/refactor</span>
+                  <span class="slash-desc">Migliora architettura</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/test')">
+                  <span class="slash-cmd">/test</span>
+                  <span class="slash-desc">Genera unit test</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/doc')">
+                  <span class="slash-cmd">/doc</span>
+                  <span class="slash-desc">Scrivi README & docs</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/explain Spiega passo-passo la logica e l architettura di questo progetto')">
+                  <span class="slash-cmd">/explain</span>
+                  <span class="slash-desc">💡 Spiega architettura & codice</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/bench Analizza le performance e i colli di bottiglia computazionali')">
+                  <span class="slash-cmd">/bench</span>
+                  <span class="slash-desc">⏱️ Profiling & Bottlenecks</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/docker Genera Dockerfile multi-stage e docker-compose per questo progetto')">
+                  <span class="slash-cmd">/docker</span>
+                  <span class="slash-desc">🐳 Dockerfile & Compose</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/ci Genera la pipeline GitHub Actions di CI/CD con test automatici')">
+                  <span class="slash-cmd">/ci</span>
+                  <span class="slash-desc">🚀 GitHub Actions CI/CD</span>
+                </div>
+                <div class="slash-item" onclick="sendQuickPrompt('/env Genera il file .env.example documentato per tutte le variabili')">
+                  <span class="slash-cmd">/env</span>
+                  <span class="slash-desc">🔑 File .env.example</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Main Terminal Console -->
+          <div class="workspace-console">
+            <div class="console-header">
+              <div class="console-title">
+                <span class="terminal-prompt-badge">╭─ claude ></span>
+                <span>Sessione su: <strong id="console-pinned-folder">LLM</strong></span>
+                <span class="model-badge-tag" id="console-model-badge">qwen2.5:7b</span>
+              </div>
+              <div class="console-actions">
+                <button class="btn btn-secondary btn-sm" id="btn-open-autodebug" title="Avvia loop autonomo di test ed eliminazione bug">🧪 Auto-Debug Loop</button>
+                <button class="btn-icon" id="btn-clear-console" title="Pulisci schermo">🧹</button>
+                <button class="btn btn-danger btn-sm" id="btn-stop-agent" style="display: none;">⏹ Interrompi</button>
+              </div>
+            </div>
+
+            <div class="console-body" id="console-output">
+              <!-- Authentic Claude Code Startup Banner -->
+              <div class="claude-terminal-banner">
+                <pre class="ascii-logo">
+  ____ _                 _         ____          _      
+ / ___| | __ _ _   _  __| | ___   / ___|___   __| | ___ 
+| |   | |/ _` | | | |/ _` |/ _ \ | |   / _ \ / _` |/ _ \
+| |___| | (_| | |_| | (_| |  __/ | |__| (_) | (_| |  __/
+ \____|_|\__,_|\__,_|\__,_|\___|  \____\___/ \__,_|\___|
+                </pre>
+                <div class="banner-info-line">
+                  <span>CUSTOM CLAUDE CODER</span> • <span>v2.1.888</span> • <span class="text-terracotta">Unlimited Local & Free Cloud Engine</span>
+                </div>
+                <div class="banner-status-box">
+                  <div>📂 <strong>Workspace:</strong> <span id="banner-workspace-path">/LLM</span></div>
+                  <div>🤖 <strong>Active Model:</strong> <span id="banner-model-name">qwen2.5:7b</span></div>
+                  <div>🛡️ <strong>Permissions:</strong> <span class="text-success">auto (bypassPermissions)</span></div>
+                  <div>⚡ <strong>Token Billing:</strong> <span class="text-terracotta">€ 0.00 / Free Rate Limits</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="console-input-area">
+              <form id="agent-prompt-form" class="input-form">
+                <div class="input-prompt-row">
+                  <span class="prompt-arrow">❯</span>
+                  <textarea id="agent-prompt-input" placeholder="Chiedi all'agente di lavorare su questo progetto, eseguire comandi, correggere bug o scrivere codice..." rows="2"></textarea>
+                </div>
+                <div class="input-actions">
+                  <div class="input-tags">
+                    <span class="tag" id="input-folder-tag">📁 LLM</span>
+                    <span class="tag" id="input-model-tag">⚡ qwen2.5:7b</span>
+                    <span class="tag tag-free">Cost: $0.00</span>
+                    <label class="tag" style="cursor: pointer; display: flex; align-items: center; gap: 5px; user-select: none; background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.3);">
+                      <input type="checkbox" id="check-swarm-mode" style="cursor: pointer;">
+                      <span style="font-weight: 500;">🐝 Ruflo Swarm Loop</span>
+                    </label>
+                    <span class="tag" id="voice-status-tag" style="display: none; background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444;">🎙️ Ascolto in corso...</span>
+                  </div>
+                  <div style="display: flex; gap: 8px; align-items: center; margin-left: auto;">
+                    <button type="button" class="btn btn-secondary" id="btn-voice-dictation" onclick="window.toggleVoiceDictation ? window.toggleVoiceDictation() : null" title="Dettatura vocale Hands-Free (Whisper/SpeechRecognition)">
+                      <span id="voice-icon">🎙️</span>
+                      <span id="voice-label" style="font-size: 12px;">Dettatura</span>
+                    </button>
+                    <button type="submit" class="btn btn-primary" id="btn-send-prompt">
+                      <span>Invia</span>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: MODEL HUB (CEREBRAS, SAMBANOVA, MISTRAL, GROQ, OPENROUTER, GEMINI, OLLAMA) -->
+      <section id="tab-models" class="tab-pane">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Model Hub & Free Providers Central</h2>
+            <p class="section-desc">Catalogo completo dei migliori provider gratuiti al mondo: Cerebras, SambaNova (671B), Mistral Codestral, Groq, OpenRouter e Gemini.</p>
+          </div>
+          <div class="pull-custom-box" style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+            <div style="display: flex; gap: 6px;">
+              <input type="text" id="custom-model-input" placeholder="Ollama / Hugging Face (es. deepseek-r1:8b o hf.co/TheBloke/Qwen-GGUF)..." class="form-control" style="width: 380px;">
+              <button class="btn btn-primary" id="btn-pull-custom">Scarica Modello</button>
+            </div>
+            <span style="font-size: 11px; color: var(--text-muted);">Supporta qualsiasi modello Ollama o GGUF da Hugging Face tramite prefisso <code>hf.co/utente/repo</code></span>
+          </div>
+        </div>
+
+        <!-- Pull Progress Bar -->
+        <div id="pull-progress-card" class="card progress-card" style="display: none;">
+          <div class="progress-info">
+            <div class="progress-title" id="progress-model-name">Download Modello...</div>
+            <div class="progress-status" id="progress-status-text">Inizializzazione...</div>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%;"></div>
+          </div>
+        </div>
+
+        <!-- 1. CEREBRAS CLOUD (RECORD SPEED ~1800 TOK/S) -->
+        <div class="models-section">
+          <div class="section-category-header">
+            <span class="category-icon">⚡</span>
+            <div>
+              <h3 class="subsection-title">Cerebras Cloud (Velocità Record ~1.800 token/sec)</h3>
+              <p class="category-sub">Inferenza fulminea su chip a livello di wafer Cerebras CS-3. Free Developer Tier.</p>
+            </div>
+            <span class="badge badge-tag" id="badge-cerebras-status">API Key: Non impostata</span>
+          </div>
+          <div class="models-grid" id="cerebras-models-grid"></div>
+        </div>
+
+        <!-- 2. SAMBANOVA CLOUD (DEEPSEEK R1 671B FULL MOE) -->
+        <div class="models-section" style="margin-top: 32px;">
+          <div class="section-category-header">
+            <span class="category-icon">🧠</span>
+            <div>
+              <h3 class="subsection-title">SambaNova Cloud (DeepSeek R1 671B MoE Originale)</h3>
+              <p class="category-sub">Il modello completo da 671 miliardi di parametri accelerato su processori SambaNova SN40L.</p>
+            </div>
+            <span class="badge badge-tag" id="badge-sambanova-status">API Key: Non impostata</span>
+          </div>
+          <div class="models-grid" id="sambanova-models-grid"></div>
+        </div>
+
+        <!-- 3. MISTRAL AI (CODESTRAL 256K CONTEXT) -->
+        <div class="models-section" style="margin-top: 32px;">
+          <div class="section-category-header">
+            <span class="category-icon">🎯</span>
+            <div>
+              <h3 class="subsection-title">Mistral AI (Codestral 22B — Specializzato nel Codice)</h3>
+              <p class="category-sub">Finestra di contesto enorme da 256k token e addestramento specialistico su oltre 80 linguaggi.</p>
+            </div>
+            <span class="badge badge-tag" id="badge-mistral-status">API Key: Non impostata</span>
+          </div>
+          <div class="models-grid" id="mistral-models-grid"></div>
+        </div>
+
+        <!-- 4. GROQ CLOUD (FREE TIER ~400 TOK/S) -->
+        <div class="models-section" style="margin-top: 32px;">
+          <div class="section-category-header">
+            <span class="category-icon">🚀</span>
+            <div>
+              <h3 class="subsection-title">Groq Cloud (14.400 Richieste/Giorno Free — ~400 tok/s)</h3>
+              <p class="category-sub">Llama 3.3 70B e DeepSeek R1 Distill a velocità quasi istantanea su chip LPU.</p>
+            </div>
+            <span class="badge badge-tag" id="badge-groq-status">API Key: Non impostata</span>
+          </div>
+          <div class="models-grid" id="groq-models-grid"></div>
+        </div>
+
+        <!-- 5. OPENROUTER (:FREE MODELS) -->
+        <div class="models-section" style="margin-top: 32px;">
+          <div class="section-category-header">
+            <span class="category-icon">🌐</span>
+            <div>
+              <h3 class="subsection-title">OpenRouter Free Models (Modelli con tag :free)</h3>
+              <p class="category-sub">Accesso flessibile a DeepSeek R1 671B, Llama 3.3 70B e Qwen 2.5 Coder 32B.</p>
+            </div>
+            <span class="badge badge-tag" id="badge-openrouter-status">API Key: Non impostata</span>
+          </div>
+          <div class="models-grid" id="openrouter-models-grid"></div>
+        </div>
+
+        <!-- 6. GOOGLE GEMINI API (2M CONTEXT) -->
+        <div class="models-section" style="margin-top: 32px;">
+          <div class="section-category-header">
+            <span class="category-icon">✨</span>
+            <div>
+              <h3 class="subsection-title">Google Gemini API (Fino a 2 Milioni di Contesto)</h3>
+              <p class="category-sub">Gemini 2.5 Pro e Flash per elaborare repository enormi gratuitamente da Google AI Studio.</p>
+            </div>
+            <span class="badge badge-tag" id="badge-gemini-status">API Key: Non impostata</span>
+          </div>
+          <div class="models-grid" id="gemini-models-grid"></div>
+        </div>
+
+        <!-- 7. OPENAI / CHATGPT MODELS -->
+        <div class="models-section" style="margin-top: 32px;">
+          <div class="section-category-header">
+            <span class="category-icon">🤖</span>
+            <div>
+              <h3 class="subsection-title">OpenAI (ChatGPT — GPT-4o, GPT-4o Mini, o3-mini)</h3>
+              <p class="category-sub">I celebri modelli proprietari di OpenAI per programmazione complessa, refactoring e test.</p>
+            </div>
+            <span class="badge badge-tag" id="badge-openai-status">API Key: Non impostata</span>
+          </div>
+          <div class="models-grid" id="openai-models-grid"></div>
+        </div>
+
+        <!-- 8. LOCAL OLLAMA MODELS -->
+        <div class="models-section" style="margin-top: 32px;">
+          <div class="section-category-header">
+            <span class="category-icon">⚡</span>
+            <div>
+              <h3 class="subsection-title">Modelli Locali Installati (Ollama — 100% Offline)</h3>
+              <p class="category-sub">Eseguiti direttamente sul tuo computer senza dipendere da internet.</p>
+            </div>
+          </div>
+          <div class="models-grid" id="local-models-grid"></div>
+        </div>
+      </section>
+
+      <!-- TAB 3: PROJECT EXPLORER & CODE DIFF VIEWER -->
+      <section id="tab-explorer" class="tab-pane">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Project File Explorer & Code Diff</h2>
+            <p class="section-desc">Esplora i file del progetto e ispeziona il codice sorgente o le modifiche.</p>
+          </div>
+          <button class="btn btn-secondary" id="btn-explorer-browse" onclick="openNativeFolderPicker()">📁 Sfoglia Altra Cartella</button>
+        </div>
+
+        <div class="explorer-layout">
+          <div class="explorer-tree-panel card">
+            <h4 class="card-title">Albero dei File (<span id="explorer-folder-name">LLM</span>)</h4>
+            <div class="file-tree-container" id="explorer-tree-container"></div>
+          </div>
+
+          <div class="explorer-code-panel card">
+            <div class="code-panel-header">
+              <div>
+                <span class="code-file-title" id="explorer-current-filename">Seleziona un file a sinistra per visualizzarlo</span>
+                <span class="code-file-meta" id="explorer-current-meta"></span>
+              </div>
+              <div id="explorer-file-actions" style="display: none; gap: 6px; margin-left: auto; flex-wrap: wrap;">
+                <button class="btn btn-secondary btn-sm" onclick="window.explorerGenerateTest ? window.explorerGenerateTest() : null" title="Genera suite di test per questo file">🧪 Test</button>
+                <button class="btn btn-secondary btn-sm" onclick="window.explorerGenerateDoc ? window.explorerGenerateDoc() : null" title="Genera documentazione e commenti per questo file">📝 Doc</button>
+                <button class="btn btn-secondary btn-sm" onclick="window.explorerRefactor ? window.explorerRefactor() : null" title="Ottimizza e pulisci questo file">⚡ Refactor</button>
+                <button class="btn btn-secondary btn-sm" id="btn-explorer-open-cursor" title="Apri questo file in Cursor">⚡ Cursor</button>
+                <button class="btn btn-secondary btn-sm" id="btn-explorer-open-vscode" title="Apri questo file in VS Code">💻 VS Code</button>
+                <button class="btn btn-secondary btn-sm" id="btn-explorer-open-finder" title="Mostra nel Finder o Explorer">📂 Mostra</button>
+              </div>
+            </div>
+            <div class="code-viewer-body">
+              <pre><code id="explorer-code-content">// Clicca su un file nell'albero per visualizzarne il contenuto qui...</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: TELEMETRY & SAVINGS -->
+      <section id="tab-stats" class="tab-pane">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Telemetry & Token Economics</h2>
+            <p class="section-desc">Statistiche in tempo reale su token generati, velocità di inferenza e costi risparmiati.</p>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon">♾️</div>
+            <div class="stat-value" id="stat-total-tokens">210,000</div>
+            <div class="stat-label">Token Totali Elaborati</div>
+            <div class="stat-sub">100% Free / Local & Free Cloud</div>
+          </div>
+
+          <div class="stat-card accent">
+            <div class="stat-icon">💰</div>
+            <div class="stat-value" id="stat-savings">€ 1.89</div>
+            <div class="stat-label">Risparmio vs API Commerciali</div>
+            <div class="stat-sub">Spesa Reale: € 0.00</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon">⚡</div>
+            <div class="stat-value" id="stat-speed">45 tok/s</div>
+            <div class="stat-label">Velocità di Inferenza</div>
+            <div class="stat-sub" id="stat-speed-sub">Local / Free Cloud</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon">⏱️</div>
+            <div class="stat-value" id="stat-uptime">00:25:30</div>
+            <div class="stat-label">Tempo di Sessione</div>
+            <div class="stat-sub">Server Active</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: UNIFIED API KEYS & FREE PROVIDERS -->
+      <section id="tab-settings" class="tab-pane">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Gestione API Keys & Provider Gratuiti</h2>
+            <p class="section-desc">Inserisci le tue chiavi API gratuite per sbloccare i super-modelli da 70B, 671B e velocità record fino a 1.800 tok/s.</p>
+          </div>
+        </div>
+
+        <div class="settings-grid">
+          <!-- 1. Cerebras Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">⚡ Cerebras Cloud API Key</h3>
+              <a href="https://cloud.cerebras.ai" target="_blank" class="link-external">Ottieni Gratis ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Sblocca Llama 3.3 70B alla velocità record mondiale di <strong>~1.800 token/sec</strong>.</p>
+            <div class="form-group">
+              <input type="password" id="input-cerebras-key" placeholder="csk-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 2. SambaNova Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🧠 SambaNova Cloud API Key</h3>
+              <a href="https://cloud.sambanova.ai" target="_blank" class="link-external">Ottieni Gratis ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Sblocca il modello completo <strong>DeepSeek R1 da 671B</strong> e Llama 70B gratuitamente.</p>
+            <div class="form-group">
+              <input type="password" id="input-sambanova-key" placeholder="samba_..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 3. Mistral Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🎯 Mistral AI (Codestral) API Key</h3>
+              <a href="https://console.mistral.ai" target="_blank" class="link-external">Ottieni Gratis ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Sblocca <strong>Codestral Latest (22B)</strong> specializzato in programmazione con 256k token.</p>
+            <div class="form-group">
+              <input type="password" id="input-mistral-key" placeholder="mistral_api_key_..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 4. Groq Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🚀 Groq Cloud API Key</h3>
+              <a href="https://console.groq.com/keys" target="_blank" class="link-external">Ottieni Gratis ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Sblocca Llama 3.3 70B e DeepSeek R1 a <strong>~400 tok/s</strong> con 14.400 richieste/giorno.</p>
+            <div class="form-group">
+              <input type="password" id="input-groq-key" placeholder="gsk_..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 5. OpenRouter Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🌐 OpenRouter API Key</h3>
+              <a href="https://openrouter.ai/keys" target="_blank" class="link-external">Ottieni Gratis ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Sblocca il catalogo completo di modelli contrassegnati con <code>:free</code>.</p>
+            <div class="form-group">
+              <input type="password" id="input-openrouter-key" placeholder="sk-or-v1-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 6. Google Gemini Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">✨ Google Gemini API Key</h3>
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" class="link-external">Ottieni Gratis ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Sblocca <strong>Gemini 2.5 Pro</strong> e Flash con 2 Milioni di token di contesto gratuito.</p>
+            <div class="form-group">
+              <input type="password" id="input-gemini-key" placeholder="AIzaSy..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 7. OpenAI / ChatGPT Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🤖 OpenAI (ChatGPT) API Key</h3>
+              <a href="https://platform.openai.com/api-keys" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Sblocca <strong>GPT-4o</strong>, <strong>GPT-4o Mini</strong> e i modelli <strong>o3-mini</strong> / <strong>o1</strong>.</p>
+            <div class="form-group">
+              <input type="password" id="input-openai-key" placeholder="sk-proj-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 8. Anthropic Claude Official Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">✨ Anthropic Claude API Key</h3>
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Accesso diretto a <strong>Claude 3.5 Sonnet</strong> e <strong>Claude 3.5 Haiku</strong> ufficiali.</p>
+            <div class="form-group">
+              <input type="password" id="input-anthropic-key" placeholder="sk-ant-api03-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 9. DeepSeek Official API Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🐳 DeepSeek Official API Key</h3>
+              <a href="https://platform.deepseek.com/api_keys" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Accesso a <strong>DeepSeek-V3</strong> e <strong>DeepSeek-R1</strong> a costi bassissimi.</p>
+            <div class="form-group">
+              <input type="password" id="input-deepseek-key" placeholder="sk-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 10. xAI (Grok) API Key -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">⚡ xAI (Grok) API Key</h3>
+              <a href="https://console.x.ai" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Accesso ai modelli <strong>Grok-2</strong> e <strong>Grok-beta</strong> di Elon Musk.</p>
+            <div class="form-group">
+              <input type="password" id="input-xai-key" placeholder="xai-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 11. Moonshot Kimi (Kimi K3 / K1.5) -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🌙 Moonshot AI (Kimi K3 / K1.5)</h3>
+              <a href="https://platform.moonshot.cn" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Accesso a <strong>Kimi K3</strong> e <strong>Moonshot v1</strong> con 128k/200k di contesto.</p>
+            <div class="form-group">
+              <input type="password" id="input-kimi-key" placeholder="sk-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 12. Alibaba Qwen (DashScope) -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🇨🇳 Alibaba Qwen (DashScope API)</h3>
+              <a href="https://dashscope.aliyun.com" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Accesso a <strong>Qwen-Max</strong>, <strong>Qwen-Plus</strong> e <strong>Qwen 2.5 Coder 32B</strong> cloud.</p>
+            <div class="form-group">
+              <input type="password" id="input-qwen-key" placeholder="sk-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 13. Zhipu AI (GLM-4 / ChatGLM) -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🔮 Zhipu AI (GLM-4 / GLM-4-Coder)</h3>
+              <a href="https://open.bigmodel.cn" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Accesso ai modelli <strong>GLM-4-Plus</strong>, <strong>GLM-4-Flash</strong> e <strong>GLM-4-Coder</strong>.</p>
+            <div class="form-group">
+              <input type="password" id="input-glm-key" placeholder="API Key..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 14. Perplexity AI (Sonar / Web Search) -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🔍 Perplexity AI (Sonar & Research)</h3>
+              <a href="https://www.perplexity.ai/settings/api" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Modelli <strong>Sonar</strong> e <strong>Sonar Pro</strong> connessi al web per documentazione live.</p>
+            <div class="form-group">
+              <input type="password" id="input-perplexity-key" placeholder="pplx-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 15. Together AI -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🤝 Together AI (Hub 150+ Modelli)</h3>
+              <a href="https://api.together.ai" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Hub ad alte prestazioni per <strong>Llama 3.3</strong>, <strong>Qwen</strong> e <strong>DeepSeek</strong>.</p>
+            <div class="form-group">
+              <input type="password" id="input-together-key" placeholder="API Key..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 16. Fireworks AI -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🎆 Fireworks AI (Inferenza Ultra-Rapida)</h3>
+              <a href="https://fireworks.ai" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Inferenza serverless a bassissima latenza per modelli open-source.</p>
+            <div class="form-group">
+              <input type="password" id="input-fireworks-key" placeholder="fw_..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 17. Cohere -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🌲 Cohere (Command R+ & R7B)</h3>
+              <a href="https://dashboard.cohere.com/api-keys" target="_blank" class="link-external">Ottieni Chiave ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">I modelli <strong>Command R+</strong> specializzati in tool-use avanzato e RAG.</p>
+            <div class="form-group">
+              <input type="password" id="input-cohere-key" placeholder="API Key..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 15. Custom OpenAI-Compatible Endpoint (Inception Labs / Local / Private) -->
+          <div class="card" style="grid-column: 1 / -1; border: 1px dashed var(--primary-color);">
+            <div class="card-header-row">
+              <h3 class="card-title">🌐 Endpoint Custom Compatibile OpenAI (Inception Labs, vLLM, LM Studio, ecc.)</h3>
+              <span class="badge badge-tag">Qualsiasi API Compatibile</span>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Collega qualsiasi URL custom (es. <code>https://api.inceptionlabs.ai/v1/chat/completions</code> o server vLLM privato).</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div class="form-group">
+                <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">URL Endpoint Personalizzato:</label>
+                <input type="text" id="input-custom-endpoint" placeholder="https://api.inceptionlabs.ai/v1/chat/completions" class="form-control">
+              </div>
+              <div class="form-group">
+                <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">API Key Personalizzata (se richiesta):</label>
+                <input type="password" id="input-custom-key" placeholder="sk-..." class="form-control">
+              </div>
+            </div>
+          </div>
+
+          <!-- 8. Telegram Remote Bot Bridge (Mobile Control) -->
+          <div class="card" style="grid-column: 1 / -1; border: 1px solid rgba(99, 102, 241, 0.3); background: rgba(99, 102, 241, 0.04);">
+            <div class="card-header-row">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">📱</span>
+                <div>
+                  <h3 class="card-title" style="margin: 0;">Telegram & WhatsApp Mobile Bridge (Controllo da Smartphone)</h3>
+                  <p class="form-help" style="margin: 2px 0 0 0;">Controlla Claude Studio da remoto inviando prompt, eseguendo comandi e leggendo output dal tuo smartphone.</p>
+                </div>
+              </div>
+              <a href="https://t.me/BotFather" target="_blank" class="link-external">Crea Bot su @BotFather ↗</a>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; margin-top: 14px; align-items: flex-end;">
+              <div class="form-group">
+                <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">Telegram Bot Token:</label>
+                <input type="password" id="input-telegram-token" placeholder="123456789:ABCdefGhIJKlmNoPQRstuVWXyz..." class="form-control">
+              </div>
+              <div class="form-group">
+                <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 4px;">Tuo Chat ID Autorizzato (opzionale):</label>
+                <input type="text" id="input-telegram-chatid" placeholder="es. 123456789 (lascia vuoto per rilevamento automatico)" class="form-control">
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center; height: 38px;">
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" id="check-telegram-enabled">
+                  <span>Abilita Bot</span>
+                </label>
+                <button class="btn btn-secondary btn-sm" id="btn-save-telegram">Salva & Connetti</button>
+              </div>
+            </div>
+            <div id="telegram-status-pill" style="margin-top: 10px; font-size: 12px; color: var(--text-muted);">
+              Stato: <span id="telegram-status-text">Non configurato</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
+          <button class="btn btn-primary" id="btn-save-all-keys" style="padding: 10px 24px;">Salva Tutte le Chiavi API</button>
+        </div>
+      </section>
+
+      <!-- TAB 6: DEV SERVERS & PROCESS MULTIPLEXER (CMUX) -->
+      <section id="tab-cmux" class="tab-pane">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Dev Servers & Process Multiplexer (cmux / tmux)</h2>
+            <p class="section-desc">Esegui server di sviluppo e watcher in background in parallelo senza bloccare l'interfaccia o la chat.</p>
+          </div>
+          <button class="btn btn-primary" id="btn-cmux-new-process">+ Nuovo Processo Dev</button>
+        </div>
+
+        <div class="explorer-layout" style="grid-template-columns: 320px 1fr;">
+          <!-- Left: Process List & Quick Presets -->
+          <div class="card" style="display: flex; flex-direction: column; gap: 14px;">
+            <div class="card-header-row">
+              <h3 class="card-title">Processi Attivi</h3>
+              <button class="btn-icon" id="btn-cmux-refresh-list" title="Aggiorna lista">🔄</button>
+            </div>
+            <div id="cmux-process-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto;">
+              <div class="tree-loading">Nessun processo avviato.</div>
+            </div>
+
+            <div style="border-top: 1px solid var(--border-color); padding-top: 12px;">
+              <h4 style="font-size: 11.5px; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Avvio Rapido (Preset)</h4>
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                <button class="btn btn-secondary btn-sm" onclick="window.cmuxStartPreset('Next.js / Node Dev', 'npm run dev')" style="justify-content: flex-start; font-size: 12px;">📦 npm run dev</button>
+                <button class="btn btn-secondary btn-sm" onclick="window.cmuxStartPreset('Bun Dev Server', 'bun dev')" style="justify-content: flex-start; font-size: 12px;">🥟 bun dev</button>
+                <button class="btn btn-secondary btn-sm" onclick="window.cmuxStartPreset('Python App', 'python app.py')" style="justify-content: flex-start; font-size: 12px;">🐍 python app.py</button>
+                <button class="btn btn-secondary btn-sm" onclick="window.cmuxStartPreset('Ruflo Swarm Daemon', 'node ../ruflo-main/ruflo-main/bin/cli.js daemon')" style="justify-content: flex-start; font-size: 12px;">🐝 ruflo daemon (Swarm)</button>
+                <button class="btn btn-secondary btn-sm" onclick="window.cmuxStartPreset('FastAPI Uvicorn', 'uvicorn main:app --reload')" style="justify-content: flex-start; font-size: 12px;">⚡ uvicorn main:app</button>
+                <button class="btn btn-secondary btn-sm" onclick="window.cmuxStartPreset('Cargo Watch Run', 'cargo watch -x run')" style="justify-content: flex-start; font-size: 12px;">🦀 cargo watch</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Process Terminal View -->
+          <div class="card" style="display: flex; flex-direction: column; height: 560px; padding: 0; overflow: hidden;">
+            <div class="console-header" style="border-bottom: 1px solid var(--border-color); padding: 10px 16px;">
+              <div class="console-title" style="display: flex; align-items: center; gap: 10px;">
+                <span id="cmux-current-status-badge" class="badge badge-tag">Nessun processo</span>
+                <span id="cmux-current-name" style="font-weight: 600;">Seleziona un processo</span>
+                <span id="cmux-current-cmd" style="font-family: monospace; font-size: 11.5px; color: var(--text-muted);"></span>
+              </div>
+              <div class="console-actions" id="cmux-actions-toolbar" style="display: none; gap: 6px;">
+                <button class="btn btn-secondary btn-sm" id="btn-cmux-restart" title="Riavvia processo">🔄 Riavvia</button>
+                <button class="btn btn-danger btn-sm" id="btn-cmux-stop" title="Ferma processo">⏹ Ferma</button>
+                <button class="btn-icon" id="btn-cmux-clear" title="Pulisci log">🧹</button>
+                <button class="btn-icon" id="btn-cmux-delete" title="Rimuovi processo">🗑️</button>
+              </div>
+            </div>
+            <div id="cmux-logs-viewer" style="flex: 1; background: #0d1117; color: #c9d1d9; font-family: monospace; font-size: 12px; line-height: 1.5; padding: 14px; overflow-y: auto; white-space: pre-wrap;">// I log del processo selezionato appariranno qui in tempo reale...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 7: MCP (MODEL CONTEXT PROTOCOL) SERVERS HUB -->
+      <section id="tab-mcp" class="tab-pane">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">🔌 MCP Servers Hub & Marketplace</h2>
+            <p class="section-desc">Collega Claude Coder con app di terze parti: GitHub, Database SQL, Browser, Linear, Notion, Slack e Docker tramite Model Context Protocol.</p>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-secondary" onclick="window.exportMcpConfig('cursor')">⚡ Esporta per Cursor</button>
+            <button class="btn btn-primary" onclick="window.exportMcpConfig('claude')">🤖 Esporta per Claude Code</button>
+          </div>
+        </div>
+
+        <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: var(--border-radius); padding: 14px 18px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 24px;">🔌</span>
+            <div>
+              <div style="font-weight: 600; font-size: 13.5px; color: var(--text-color);">Configurazione Attiva: <span style="color: var(--primary-color);">.claude/mcp_config.json</span></div>
+              <div style="font-size: 12px; color: var(--text-muted);">Tutti i server abilitati sono immediatamente utilizzabili dalle sessioni multi-agente e sincronizzabili con Cursor e Claude CLI.</div>
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="window.fetchMcpServers()">🔄 Ricarica Server</button>
+        </div>
+
+        <!-- MCP Servers Grid -->
+        <div class="models-grid" id="mcp-servers-grid">
+          <!-- Dynamically populated by app.js -->
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Code Preview Modal -->
+  <div id="file-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="modal-file-name">Anteprima File</div>
+        <div style="display: flex; gap: 6px; margin-left: auto; margin-right: 12px;">
+          <button class="btn btn-secondary btn-sm" id="btn-modal-open-cursor" title="Apri file in Cursor">⚡ Cursor</button>
+          <button class="btn btn-secondary btn-sm" id="btn-modal-open-vscode" title="Apri file in VS Code">💻 VS Code</button>
+          <button class="btn btn-secondary btn-sm" id="btn-modal-open-finder" title="Mostra nel Finder">📂 Mostra</button>
+        </div>
+        <button class="btn-icon" id="btn-close-modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <pre><code id="modal-file-content"></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Project Rules Modal (.cursorrules / CLAUDE.md) -->
+  <div id="rules-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 700px; width: 90%;">
+      <div class="modal-header">
+        <div class="modal-title" id="rules-modal-title">📜 Regole di Progetto (.cursorrules / CLAUDE.md)</div>
+        <button class="btn-icon" id="btn-close-rules-modal">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 16px;">
+        <p class="section-desc" style="margin-bottom: 12px;">
+          Queste istruzioni vengono <strong>automaticamente caricate e forzate in tutti i modelli LLM</strong> (Ollama, ChatGPT, DeepSeek, Claude) ad ogni richiesta per questo progetto.
+        </p>
+        <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
+          <label style="font-size: 13px; font-weight: 500;">Tipo di file:</label>
+          <select id="select-rules-file-type" class="form-control" style="width: auto; padding: 4px 10px; font-size: 13px;">
+            <option value=".cursorrules">.cursorrules (Standard Cursor IDE)</option>
+            <option value="CLAUDE.md">CLAUDE.md (Standard Claude Code)</option>
+            <option value="AGENTS.md">AGENTS.md (Standard Multi-Agent)</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" id="btn-insert-rules-template" style="margin-left: auto;">
+            ✨ Inserisci Modello Base
+          </button>
+        </div>
+        <textarea id="textarea-rules-content" class="form-control" style="width: 100%; height: 260px; font-family: monospace; font-size: 12.5px; line-height: 1.5; padding: 10px; resize: vertical;" placeholder="# Istruzioni di Progetto per gli Agenti AI..."></textarea>
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border-color);">
+        <button class="btn btn-secondary" id="btn-cancel-rules">Annulla</button>
+        <button class="btn btn-primary" id="btn-save-rules">💾 Salva Regole nel Progetto</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auto-Debug / Self-Healing Modal (OpenCode Style) -->
+  <div id="autodebug-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 650px; width: 90%;">
+      <div class="modal-header">
+        <div class="modal-title">🧪 Auto-Debug & Test Loop (OpenCode Engine)</div>
+        <button class="btn-icon" id="btn-close-autodebug-modal">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 16px;">
+        <p class="section-desc" style="margin-bottom: 12px;">
+          L'agente esegue il comando di test nella cartella attiva. Se si verifica un errore, analizza lo stack trace ed emette la diagnosi e la correzione di codice per far passare i test.
+        </p>
+        <div class="form-group" style="margin-bottom: 14px;">
+          <label style="font-size: 13px; font-weight: 500; display: block; margin-bottom: 6px;">Comando di Test / Esecuzione:</label>
+          <input type="text" id="input-autodebug-cmd" class="form-control" placeholder="npm test / pytest / cargo test / bun test / python script.py" style="font-family: monospace;">
+        </div>
+        <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="window.setAutoDebugCmd('npm test')">📦 npm test</button>
+          <button class="btn btn-secondary btn-sm" onclick="window.setAutoDebugCmd('bun test')">🥟 bun test</button>
+          <button class="btn btn-secondary btn-sm" onclick="window.setAutoDebugCmd('pytest')">🐍 pytest</button>
+          <button class="btn btn-secondary btn-sm" onclick="window.setAutoDebugCmd('cargo test')">🦀 cargo test</button>
+          <button class="btn btn-secondary btn-sm" onclick="window.setAutoDebugCmd('flutter test')">🎯 flutter test</button>
+        </div>
+        <div class="form-group" style="margin-bottom: 14px;">
+          <label style="font-size: 13px; font-weight: 500; display: block; margin-bottom: 6px;">Numero massimo di iterazioni:</label>
+          <select id="select-autodebug-iterations" class="form-control" style="width: 140px;">
+            <option value="1">1 ciclo</option>
+            <option value="3" selected>3 cicli</option>
+            <option value="5">5 cicli</option>
+          </select>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border-color);">
+        <button class="btn btn-secondary" id="btn-cancel-autodebug">Annulla</button>
+        <button class="btn btn-primary" id="btn-run-autodebug">🚀 Avvia Loop di Auto-Debug</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Background Process Modal (cmux) -->
+  <div id="cmux-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 550px; width: 90%;">
+      <div class="modal-header">
+        <div class="modal-title">⚡ Avvia Processo Dev in Background (cmux)</div>
+        <button class="btn-icon" id="btn-close-cmux-modal">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 16px;">
+        <div class="form-group" style="margin-bottom: 12px;">
+          <label style="font-size: 13px; font-weight: 500; display: block; margin-bottom: 6px;">Nome Identificativo:</label>
+          <input type="text" id="input-cmux-name" class="form-control" placeholder="es. Next.js Dev Server / FastAPI Backend">
+        </div>
+        <div class="form-group" style="margin-bottom: 12px;">
+          <label style="font-size: 13px; font-weight: 500; display: block; margin-bottom: 6px;">Comando da Eseguire:</label>
+          <input type="text" id="input-cmux-cmd" class="form-control" placeholder="npm run dev / bun server.ts / python app.py" style="font-family: monospace;">
+        </div>
+        <div class="form-group" style="margin-bottom: 12px;">
+          <label style="font-size: 13px; font-weight: 500; display: block; margin-bottom: 6px;">Cartella di Esecuzione (Working Directory):</label>
+          <input type="text" id="input-cmux-cwd" class="form-control" placeholder="Lascia vuoto per la cartella root o inserisci sottocartella (es. claude-local-studio)" style="font-family: monospace; font-size: 12px;">
+        <div style="margin-top: 12px;">
+          <label style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 6px; color: var(--text-muted);">Preset Rapidi:</label>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="window.setCmuxPreset('AirLLM 70B Streamer', 'python airllm_server.py --mock', '')">🚀 AirLLM (Porta 5000)</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="window.setCmuxPreset('EXO Cluster', 'exo', '')">🌐 EXO Cluster (52415)</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="window.setCmuxPreset('Dev Server', 'npm run dev', '')">📦 npm run dev</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="window.setCmuxPreset('Bun Server', 'bun server.ts', 'claude-local-studio')">🥟 bun server.ts</button>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border-color);">
+        <button class="btn btn-secondary" id="btn-cancel-cmux">Annulla</button>
+        <button class="btn btn-primary" id="btn-submit-cmux-process">▶ Avvia in Background</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AST Repo Map Modal (Aider Style) -->
+  <div id="ast-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 700px; width: 90%; max-height: 80vh; display: flex; flex-direction: column;">
+      <div class="modal-header">
+        <div class="modal-title">🗺️ Mappa Sintattica dei Simboli (AST Repo Map)</div>
+        <button class="btn-icon" id="btn-close-ast-modal" onclick="document.getElementById('ast-modal').style.display='none'">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 16px; overflow-y: auto; flex: 1;">
+        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+          Firme di funzioni, classi, interfacce e tipi estratti automaticamente con AST Tree-Sitter (stile Aider) e iniettati nel contesto dell'agente.
+        </div>
+        <pre id="ast-modal-content" style="background: #0d1117; color: #7ee787; font-family: monospace; font-size: 12px; line-height: 1.5; padding: 14px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap;">Caricamento mappa simboli...</pre>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-top: 1px solid var(--border-color);">
+        <span id="ast-modal-stats" style="font-size: 12px; color: var(--text-muted);">...</span>
+        <button class="btn btn-secondary" onclick="document.getElementById('ast-modal').style.display='none'">Chiudi</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MemGPT / Letta Hierarchical Memory Modal -->
+  <div id="memory-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 750px; width: 90%; max-height: 85vh; display: flex; flex-direction: column;">
+      <div class="modal-header">
+        <div class="modal-title">🧠 Memoria Gerarchica di Progetto (Letta / MemGPT Engine)</div>
+        <button class="btn-icon" id="btn-close-memory-modal" onclick="document.getElementById('memory-modal').style.display='none'">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 16px; overflow-y: auto; flex: 1;">
+        <!-- Tier 1: Working Scratchpad -->
+        <div style="margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 13px; font-weight: 600; color: var(--terracotta);">📌 Livello 1: Working Scratchpad (Stato e Focus Immediato)</label>
+            <button class="btn btn-secondary btn-sm" onclick="window.saveWorkingScratchpad ? window.saveWorkingScratchpad() : null">💾 Salva Scratchpad</button>
+          </div>
+          <textarea id="memory-scratchpad-input" class="form-control" style="width: 100%; height: 75px; font-size: 12px; font-family: monospace;" placeholder="Obiettivo attivo o appunto di sessione temporaneo (es. 'Refactoring modulo autenticazione in corso...')"></textarea>
+        </div>
+
+        <!-- Tier 2 & 3: Memory Tiers View -->
+        <div style="margin-bottom: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <label style="font-size: 13px; font-weight: 600; color: #60a5fa;">🏛️ Livelli 2 & 3: Memoria Episodica & Conoscenza Architetturale Persistente</label>
+            <button class="btn btn-primary btn-sm" onclick="window.showAddMemoryForm ? window.showAddMemoryForm() : null">➕ Aggiungi Ricordo</button>
+          </div>
+          <div id="memory-add-form" style="display: none; background: rgba(255,255,255,0.03); padding: 12px; border-radius: 6px; border: 1px solid var(--border-color); margin-bottom: 12px;">
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+              <input type="text" id="input-new-mem-topic" class="form-control" placeholder="Argomento (es. Convenzione Database)" style="flex: 1; font-size: 12px;">
+              <select id="select-new-mem-tier" class="form-control" style="width: 140px; font-size: 12px;">
+                <option value="archival" selected>Archival (Lungo termine)</option>
+                <option value="episodic">Episodic (Sessione)</option>
+              </select>
+            </div>
+            <textarea id="input-new-mem-insight" class="form-control" style="width: 100%; height: 60px; font-size: 12px; margin-bottom: 8px;" placeholder="Insight / Regola memorizzata per gli agenti..."></textarea>
+            <div style="display: flex; justify-content: flex-end; gap: 6px;">
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('memory-add-form').style.display='none'">Annulla</button>
+              <button class="btn btn-primary btn-sm" onclick="window.submitNewMemoryItem ? window.submitNewMemoryItem() : null">Salva in AgentDB</button>
+            </div>
+          </div>
+          <div id="memory-items-list" style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="font-size: 12px; color: var(--text-muted);">Caricamento memoria gerarchica...</div>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-top: 1px solid var(--border-color);">
+        <span id="memory-modal-stats" style="font-size: 12px; color: var(--text-muted);">.claude/agentdb.json sincronizzato</span>
+        <button class="btn btn-secondary" onclick="document.getElementById('memory-modal').style.display='none'">Chiudi</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

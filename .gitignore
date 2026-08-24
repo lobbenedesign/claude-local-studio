@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+bun.lockb
+package-lock.json
+
+# Local Environment & Private Keys
+.env
+.env.local
+.config/settings.json
+.claude/
+*.log
+
+# OS Metadata
+.DS_Store
+Thumbs.db
