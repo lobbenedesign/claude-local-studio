@@ -1,85 +1,90 @@
 # ⚡ Claude Local Studio
 
-> **L'interfaccia Web & Server di sviluppo universale per Claude Code, Swarm Multi-Agente (Ruflo), Aider, MetaGPT e 20+ Provider di Intelligenza Artificiale (Offline & Cloud Gratuito).**
+[![Bun](https://img.shields.io/badge/Bun-v1.4+-black.svg?logo=bun)](https://bun.sh/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg?logo=typescript)](https://www.typescriptlang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Universal LLMs](https://img.shields.io/badge/LLMs-20%2B%20Providers-orange.svg)](#-universal-model-support)
+
+> **The universal, privacy-first Web Studio & Dev Server for Claude Code, Multi-Agent Swarms (Ruflo), AST Repo Maps (Aider), Visual Architecture Diagrams (MetaGPT), and 20+ Local & Cloud AI Providers.**
 
 ![Claude Studio Dashboard](./public/screenshot.jpg)
 
 ---
 
-## 🌟 Caratteristiche Principali
+## 🌟 Key Features & Competitive Advantages
 
-### 1. 🤖 100% Universale (Zero Costi & Privacy Totale)
-* **Offline Locale**: Supporto nativo per **Ollama**, **GGUF**, **Apple MLX**, **vLLM**, **LM Studio**, **Mozilla Llamafile** e **AirLLM** (modelli da 70B su GPU da 4GB).
-* **Cloud ad Altissima Velocità & Gratuito**: Supporto integrato con **Cerebras (1.800+ tok/s)**, **Groq LPU (350+ tok/s)**, **SambaNova**, **Mistral Codestral (256k)**, **Google Gemini 2.5 Pro (1M-2M token)**, **DeepSeek V3/R1**, **OpenAI (GPT-4o, o3-mini)**, **xAI Grok**, **Moonshot Kimi**, **Alibaba Qwen**, **Zhipu GLM**, **Perplexity Sonar** e **OpenRouter**.
+### 1. 🤖 100% Universal Model Support (Zero Token Costs & Complete Privacy)
+* **Local Offline**: Native support for **Ollama**, **GGUF**, **Apple MLX**, **vLLM**, **LM Studio**, **Mozilla Llamafile**, and **AirLLM** (run 70B models on 4GB VRAM via NVMe layer streaming).
+* **Ultra-Fast Cloud Free Tiers**: Built-in support for **Cerebras (1,800+ tok/s)**, **Groq LPU (350+ tok/s)**, **SambaNova**, **Mistral Codestral (256k context)**, **Google Gemini 2.5 Pro (1M-2M context)**, **DeepSeek V3 / R1**, **OpenAI (GPT-4o, o3-mini)**, **xAI Grok**, **Moonshot Kimi**, **Alibaba Qwen**, **Zhipu GLM**, **Perplexity Sonar**, and **OpenRouter**.
 
-### 2. 🐝 Loop Multi-Agente Swarm (Ruflo / Ralph Loop)
-* Scomposizione autonoma a 3 fasi: **System Architect** $\rightarrow$ **Core Coder** $\rightarrow$ **Reviewer** con consenso a triplo giudice e memorizzazione delle decisioni in `AgentDB`.
+### 2. 🐝 Multi-Agent Swarm Loop (Ruflo / Ralph Loop)
+* Autonomous 3-stage consensus pipeline: **System Architect** $\rightarrow$ **Core Coder** $\rightarrow$ **Reviewer** with a triple-judge consensus engine and persistent decision caching in `AgentDB`.
 
 ### 3. 🗺️ AST Repo Map & Context Mentions (Aider & Continue style)
-* Estrazione sintattica istantanea di simboli, funzioni, classi e interfacce (TypeScript, Python, Rust, Dart/Flutter, Go, C++) con consumo minimo di token.
-* Supporto per menzioni contestuali nel prompt: `@file:<path>`, `@git`, `@diff`.
+* Instant Tree-Sitter syntactic extraction of exported functions, classes, interfaces, and types (TypeScript, Python, Rust, Dart/Flutter, Go, C++) with `< 10%` token overhead.
+* Support for contextual prompt mentions: `@file:<path>`, `@git`, `@diff`.
 
-### 4. 🎨 Diagrammi Architetturali & Specifiche PRD (MetaGPT / Mermaid)
-* Renderizza visualmente grafi di flusso, sequenze e modelli ER a colori direttamente nella console con il comando `/diagram`.
-* Genera Product Requirement Document completi con `/prd`.
+### 4. 🎨 Visual Architecture Diagrams & PRD Engine (MetaGPT / Mermaid.js)
+* Live rendering of interactive color diagrams (flowcharts, sequence diagrams, class models, ER graphs) directly in the console with `/diagram`.
+* Generates structured Product Requirement Documents (PRDs) with `/prd`.
 
-### 5. 🎙️ Voice-to-Code (Hands-Free Dictation)
-* Dettatura vocale con trascrizione in tempo reale in italiano e inglese premendo il pulsante microfono.
+### 5. 🎙️ Hands-Free Voice-to-Code (Whisper / Speech Engine)
+* Real-time multi-language voice dictation directly into the prompt box with speech recognition.
 
-### 6. 🧠 Memoria Gerarchica a 3 Livelli (Letta / MemGPT Engine)
-* **Livello 1 (Working Scratchpad)**: stato immediato del task attivo.
-* **Livello 2 (Episodic Memories)**: storico recente delle azioni e dei comandi.
-* **Livello 3 (Archival Base)**: regole architetturali persistenti e preferenze dello sviluppatore.
+### 6. 🧠 3-Tier Hierarchical Memory (Letta / MemGPT Engine)
+* **Tier 1 (Working Scratchpad)**: immediate task status and focus.
+* **Tier 2 (Episodic Memories)**: recent session actions, decisions, and command outputs.
+* **Tier 3 (Archival Base)**: persistent architectural conventions and developer preferences.
 
-### 7. ⚡ Dev Server Multiplexer (`cmux`)
-* Gestione e streaming in tempo reale di molteplici processi di sviluppo in parallelo (`npm run dev`, `bun server.ts`, `python app.py`, nodi `exo` e `airllm`).
+### 7. ⚡ Background Dev Server Multiplexer (`cmux`)
+* Run and monitor multiple background dev processes in parallel (`npm run dev`, `bun server.ts`, `python app.py`, `airllm`, `exo`) with real-time log streaming.
 
-### 8. 📱 Mobile Remote Bridge (Telegram)
-* Controlla il tuo workspace dal tuo smartphone tramite bot Telegram sicuro (senza dover aprire porte nel router).
+### 8. 📱 Mobile Remote Bridge (Telegram Bot)
+* Control your coding workspace remotely from your smartphone using a secure, firewall-bypassing Telegram long-polling bot.
 
 ---
 
-## 🚀 Guida ai 17 Comandi Rapidi (/Slash Commands)
+## 🚀 The 17 Specialized Slash Commands
 
-| Comando | Descrizione & Specializzazione |
+| Slash Command | Role & Specialization |
 | :--- | :--- |
-| **`/swarm <task>`** | Esegue la pipeline multi-agente a 3 fasi (Ruflo) |
-| **`/diagram <richiesta>`** | Genera e renderizza diagrammi architetturali visuali con Mermaid.js |
-| **`/prd <feature>`** | Redige il Product Requirement Document (PRD) strutturato |
-| **`/autofix`** | Loop autonomo di test ed eliminazione bug su stack trace reale |
-| **`/review`** | Audit di sicurezza, bug latenti e rispetto delle convenzioni |
-| **`/refactor`** | Riscrittura modulare e pulizia orientata ai principi SOLID |
-| **`/test`** | Genera una suite completa di unit test e test di integrazione |
-| **`/bench`** | Profiling della complessità computazionale ($O(n)$) e colli di bottiglia |
-| **`/commit`** | Genera un commit semantico convenzionale analizzando `git diff` |
-| **`/secscan`** | Scansiona il progetto alla ricerca di token API o chiavi private |
-| **`/docker`** | Genera `Dockerfile` multi-stage di produzione e `docker-compose.yml` |
-| **`/ci`** | Crea la pipeline GitHub Actions con test e build automatici |
-| **`/env`** | Genera il file `.env.example` documentato |
-| **`/explain`** | Spiegazione passo-passo della logica e del flusso dati |
-| **`/doc`** | Creazione automatica di `README.md` e commenti JSDoc/Docstring |
-| **`/clear`** | Pulisce lo schermo della console |
-| **`/help`** | Mostra la guida interattiva completa |
+| **`/swarm <task>`** | Runs the autonomous 3-agent swarm pipeline (Ruflo) |
+| **`/diagram <task>`** | Generates visual Mermaid.js architectural diagrams |
+| **`/prd <feature>`** | Creates a comprehensive Product Requirement Document |
+| **`/autofix`** | Autonomous test-and-repair loop on real stack traces |
+| **`/review`** | Deep security audit, latent bug detection, and code smell analysis |
+| **`/refactor`** | Clean SOLID refactoring and modular optimization |
+| **`/test`** | Generates complete, isolated unit and integration test suites |
+| **`/bench`** | Computational complexity ($O(n)$) and bottleneck profiling |
+| **`/commit`** | Auto-generates conventional semantic Git commits from diffs |
+| **`/secscan`** | Scans workspace for leaked API tokens and private keys |
+| **`/docker`** | Generates multi-stage production Dockerfiles and docker-compose |
+| **`/ci`** | Generates automated GitHub Actions CI/CD workflows |
+| **`/env`** | Creates a fully documented `.env.example` file |
+| **`/explain`** | Step-by-step logic and architectural onboarding walkthrough |
+| **`/doc`** | Generates README files, API docs, and JSDoc/Docstrings |
+| **`/clear`** | Clears the terminal console display |
+| **`/help`** | Displays the interactive command guide |
 
 ---
 
-## 🛠️ Installazione & Avvio
+## 🛠️ Quick Start
 
 ```bash
-# 1. Clona il repository
-git clone https://github.com/tuo-username/claude-local-studio.git
+# 1. Clone the repository
+git clone https://github.com/lobbenedesign/claude-local-studio.git
 cd claude-local-studio
 
-# 2. Installa le dipendenze
-bun install  # oppure npm install
+# 2. Install dependencies
+bun install  # or npm install
 
-# 3. Avvia il server
+# 3. Start the server
 bun server.ts
 ```
 
-Apri il browser su **`http://localhost:3001`**.
+Open your browser at **`http://localhost:3001`**.
 
 ---
 
-## 📄 Licenza
-Rilasciato sotto licenza MIT.
+## 📄 License
+Released under the [MIT License](LICENSE).
