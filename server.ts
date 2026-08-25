@@ -1055,15 +1055,18 @@ const DEFAULT_MCP_CATALOG = [
   },
   {
     id: "agentdb",
-    name: "RuVector & AgentDB Vector Memory MCP",
+    name: "AgentDB Memoria Locale (JSON, non vettoriale)",
     icon: "🧠",
-    desc: "Database vettoriale e memoria semantica persistente a lungo termine (Ruflo).",
+    desc: "Memoria persistente a 3 livelli (working/episodic/archival) salvata come JSON in .claude/agentdb.json. NON è un vero database vettoriale: nessun embedding, nessuna ricerca per similarità semantica, solo elenco cronologico di insight testuali.",
     category: "AI & Memory",
     command: "node",
     args: ["../ruflo-main/ruflo-main/bin/cli.js", "mcp"],
     envKey: "",
     envPlaceholder: "",
-    enabled: true
+    // Disabilitato di default: il path sopra presuppone una cartella "ruflo-main" installata
+    // in una posizione relativa allo workspace dell'utente che nella pratica quasi mai esiste.
+    // Abilitarlo di default causava un export MCP rotto (comando non trovato) verso ~/.claude/mcp.json.
+    enabled: false
   }
 ];
 
@@ -2229,11 +2232,15 @@ Fornisci risposte complete, codice pulito e pronto all'uso, spiegazioni chiare e
                 saveProjectInsight(
                   workspace,
                   cleanPrompt.slice(0, 35),
-                  `Eseguito con successo in modalità Ruflo Swarm (${new Date().toLocaleDateString()})`,
-                  ["ruflo", "swarm", "consensus"]
+                  `Eseguita pipeline a 3 fasi (Architect → Coder → Reviewer) in modalità Ruflo Swarm (${new Date().toLocaleDateString()})`,
+                  ["ruflo", "swarm"]
                 );
 
-                await writer.write(encoder.encode(`\n════════════════════════════════════════════════════════════════\n✅ [RUFLO SWARM CONSENSUS PASSATO - MEMORIZZATO IN AGENTDB]\n`));
+                // NOTA ONESTÀ: questa pipeline esegue 3 chiamate sequenziali allo stesso modello attivo
+                // con system prompt diversi (Architect/Coder/Reviewer). Non c'è un vero consenso multi-modello
+                // né un giudizio automatico pass/fail: la fase Reviewer produce solo testo di revisione,
+                // che va letto per capire se ci sono problemi. Il banner sotto NON significa "nessun problema trovato".
+                await writer.write(encoder.encode(`\n════════════════════════════════════════════════════════════════\n✅ [PIPELINE RUFLO SWARM COMPLETATA - 3 FASI ESEGUITE, RIVEDI L'OUTPUT DEL REVIEWER SOPRA - MEMORIZZATO IN AGENTDB]\n`));
               } else {
                 // ========================================================
                 // ⚡ STANDARD SINGLE-AGENT EXECUTION

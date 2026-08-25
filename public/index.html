@@ -319,7 +319,7 @@
                     <span class="tag" id="voice-status-tag" style="display: none; background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444;">🎙️ Ascolto in corso...</span>
                   </div>
                   <div style="display: flex; gap: 8px; align-items: center; margin-left: auto;">
-                    <button type="button" class="btn btn-secondary" id="btn-voice-dictation" onclick="window.toggleVoiceDictation ? window.toggleVoiceDictation() : null" title="Dettatura vocale Hands-Free (Whisper/SpeechRecognition)">
+                    <button type="button" class="btn btn-secondary" id="btn-voice-dictation" onclick="window.toggleVoiceDictation ? window.toggleVoiceDictation() : null" title="Dettatura vocale Hands-Free (Web SpeechRecognition del browser, non Whisper)">
                       <span id="voice-icon">🎙️</span>
                       <span id="voice-label" style="font-size: 12px;">Dettatura</span>
                     </button>
@@ -1040,7 +1040,7 @@
       </div>
       <div class="modal-body" style="padding: 16px; overflow-y: auto; flex: 1;">
         <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-          Firme di funzioni, classi, interfacce e tipi estratti automaticamente con AST Tree-Sitter (stile Aider) e iniettati nel contesto dell'agente.
+          Firme di funzioni, classi, interfacce e tipi estratti tramite scansione riga-per-riga con espressioni regolari (non un vero parser AST/Tree-Sitter) e iniettati nel contesto dell'agente.
         </div>
         <pre id="ast-modal-content" style="background: #0d1117; color: #7ee787; font-family: monospace; font-size: 12px; line-height: 1.5; padding: 14px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap;">Caricamento mappa simboli...</pre>
       </div>
