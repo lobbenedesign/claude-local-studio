@@ -7,8 +7,8 @@
 
 [English 🇬🇧](#english) • [Italiano 🇮🇹](#italiano)
 
-> **The universal, privacy-first Web Studio & Dev Server for Claude Code, a sequential 3-role agent pipeline (Ruflo-style), a regex-based repo symbol map (Aider-style), Visual Architecture Diagrams (MetaGPT), and 20+ Local & Cloud AI Providers.**
-> *L'interfaccia Web & Server di sviluppo universale per Claude Code, una pipeline sequenziale a 3 ruoli (stile Ruflo), una mappa dei simboli basata su regex (stile Aider), MetaGPT e 20+ Provider di Intelligenza Artificiale.*
+> **The universal, privacy-first Web Studio & Dev Server for Claude Code, a sequential 3-role agent pipeline (Ruflo-style), a real AST repo symbol map for TypeScript/JavaScript (Aider-style, with regex fallback for other languages), Visual Architecture Diagrams (MetaGPT), and 20+ Local & Cloud AI Providers.**
+> *L'interfaccia Web & Server di sviluppo universale per Claude Code, una pipeline sequenziale a 3 ruoli (stile Ruflo), una mappa dei simboli con AST reale per TypeScript/JavaScript (stile Aider, con fallback a regex per gli altri linguaggi), MetaGPT e 20+ Provider di Intelligenza Artificiale.*
 
 ![Claude Studio Dashboard](./public/screenshot.jpg)
 
@@ -27,8 +27,9 @@
 * `/swarm` runs 3 **sequential** calls to the same active model, each with a different role system-prompt: **System Architect** $\rightarrow$ **Core Coder** $\rightarrow$ **Reviewer**. Each phase's output is auto-saved as a text insight in `AgentDB` (a local JSON file, see below).
 * Honesty note: this is a single-model prompt-chaining pipeline, not a multi-model swarm. There is no real voting/consensus algorithm between independent models, and the "Reviewer" phase does not automatically block or grade the output — its critique is plain text you have to read yourself.
 
-#### 3. 🗺️ Regex-Based Repo Map & Context Mentions (Aider & Continue style)
-* Lightweight line-by-line **regex** extraction of exported functions, classes, interfaces, and types (TypeScript, Python, Rust, Dart/Flutter, Go, C++). This is *not* a real AST/Tree-Sitter parser — no syntax tree is built, so multi-line signatures, nested scopes, and non-trivial syntax can be missed or mis-parsed. It's a fast heuristic symbol scanner, good enough to inject useful context, not a precise structural map.
+#### 3. 🗺️ Real AST Repo Map & Context Mentions (Aider & Continue style)
+* For **TypeScript / JavaScript / TSX / JSX / MJS / CJS**, the repo map is built with the real **TypeScript Compiler API** (`ts.createSourceFile` + AST traversal, the same parser `tsc` itself uses) — not a text/regex scan. It correctly ignores strings, comments, and symbol-shaped text inside template literals, and extracts genuine `FunctionDeclaration`, `ClassDeclaration` (with methods/properties), `InterfaceDeclaration`, `TypeAliasDeclaration`, `EnumDeclaration`, and exported `const` arrow-function signatures straight from the parsed nodes. Each entry in the map is tagged `🌳 AST` so it's clear it came from a real syntax tree.
+* For every other language (Python, Rust, Dart/Flutter, Go, Java, C/C++, ...) there is no bundled parser, so the map falls back to a lightweight line-by-line **regex** heuristic scanner. Those entries are explicitly tagged `🔤 regex-fallback` in the output, so it's always clear which files were structurally parsed and which were pattern-matched. Multi-line signatures, nested scopes, and non-trivial syntax can still be missed or mis-parsed in the regex-fallback files.
 * Support for contextual prompt mentions: `@file:<path>`, `@git`, `@diff`.
 
 #### 4. 🎨 Visual Architecture Diagrams & PRD Engine (MetaGPT / Mermaid.js)
@@ -49,6 +50,10 @@
 
 #### 8. 📱 Mobile Remote Bridge (Telegram Bot)
 * Control your coding workspace remotely from your smartphone using a secure, firewall-bypassing Telegram long-polling bot.
+
+#### 9. 🔀 Real Unified-Diff Preview & Apply, and a Real Multi-Provider Ensemble
+* `/api/workspace/file/diff-preview` computes a genuine unified diff (Myers algorithm, via the `diff` npm package) between a file's on-disk content and LLM-proposed new content — preview-only, nothing is written. `/api/workspace/file/diff-apply` writes it for real, with an optional optimistic-concurrency check (`expectedOldContent`) so a file that changed on disk since the preview isn't silently clobbered.
+* `/api/agent/ensemble` sends the same prompt to 2+ **different** configured cloud providers/models in parallel (Anthropic, OpenAI, Groq, Cerebras, Mistral, Gemini, OpenRouter) and returns each one's raw, unmodified response. Unlike the 3-role pipeline above, this is a real cross-provider comparison — no voting, no merged "consensus" answer.
 
 ### 🚀 The 17 Specialized Slash Commands
 
@@ -96,8 +101,9 @@ Open **`http://localhost:3001`** in your browser.
 * `/swarm` esegue 3 chiamate **sequenziali** allo stesso modello attivo, ognuna con un system prompt di ruolo diverso: **System Architect** $\rightarrow$ **Core Coder** $\rightarrow$ **Reviewer**. L'output di ogni fase viene salvato come insight testuale in `AgentDB` (un file JSON locale, vedi sotto).
 * Nota di onestà: è una pipeline di prompt-chaining su un singolo modello, non uno swarm multi-modello. Non esiste un vero algoritmo di voto/consenso tra modelli indipendenti, e la fase "Reviewer" non blocca né vota automaticamente l'output: la sua critica è testo semplice che va letto.
 
-#### 3. 🗺️ Repo Map Basata su Regex & Context Mentions (Aider & Continue style)
-* Estrazione riga-per-riga tramite **espressioni regolari** dei simboli del progetto (TypeScript, Python, Rust, Dart, Go, C++). Non è un vero parser AST/Tree-Sitter: non viene costruito alcun albero sintattico, quindi firme multi-riga, scope annidati e sintassi non banale possono essere persi o interpretati male. È uno scanner euristico veloce, utile per iniettare contesto, non una mappa strutturale precisa.
+#### 3. 🗺️ Repo Map con AST Reale & Context Mentions (Aider & Continue style)
+* Per **TypeScript / JavaScript / TSX / JSX / MJS / CJS** la mappa viene costruita con la vera **TypeScript Compiler API** (`ts.createSourceFile` + traversal dell'AST, lo stesso parser usato da `tsc`) — non una scansione testuale/regex. Ignora correttamente stringhe, commenti e testo simile a simboli dentro i template literal, ed estrae `FunctionDeclaration`, `ClassDeclaration` (con metodi/proprietà), `InterfaceDeclaration`, `TypeAliasDeclaration`, `EnumDeclaration` ed export `const` arrow-function reali, direttamente dai nodi parsati. Ogni voce della mappa è taggata `🌳 AST` per essere chiara sulla sua origine.
+* Per tutti gli altri linguaggi (Python, Rust, Dart/Flutter, Go, Java, C/C++, ...) non è incluso un parser dedicato, quindi la mappa ricade su uno scanner euristico riga-per-riga a **espressioni regolari**. Quelle voci sono taggate esplicitamente `🔤 regex-fallback` nell'output, così è sempre chiaro quali file sono stati analizzati strutturalmente e quali solo con pattern matching. Nei file regex-fallback, firme multi-riga, scope annidati e sintassi non banale possono ancora essere persi o interpretati male.
 * Menzioni nel prompt: `@file:<path>`, `@git`, `@diff`.
 
 #### 4. 🎨 Diagrammi Architetturali & Specifiche PRD (MetaGPT / Mermaid)
@@ -112,6 +118,10 @@ Open **`http://localhost:3001`** in your browser.
 
 #### 7. ⚡ Dev Server Multiplexer (`cmux`) & Controllo Mobile (Telegram)
 * Gestione di processi dev paralleli in background e controllo remoto da smartphone via bot Telegram sicuro.
+
+#### 8. 🔀 Diff Unificata Reale (Preview & Apply) & Confronto Multi-Provider Reale
+* `/api/workspace/file/diff-preview` calcola una vera diff unificata (algoritmo di Myers, tramite il pacchetto npm `diff`) tra il contenuto su disco di un file e il nuovo contenuto proposto dall'LLM — solo anteprima, nessuna scrittura. `/api/workspace/file/diff-apply` scrive davvero su disco, con un controllo opzionale di concorrenza ottimistica (`expectedOldContent`) per evitare di sovrascrivere in silenzio un file cambiato nel frattempo.
+* `/api/agent/ensemble` invia lo stesso prompt a 2+ provider/modelli cloud **diversi** configurati in parallelo (Anthropic, OpenAI, Groq, Cerebras, Mistral, Gemini, OpenRouter) e restituisce ogni risposta grezza e non modificata. A differenza della pipeline a 3 ruoli sopra, questo è un vero confronto cross-provider: nessun voto, nessuna risposta "consenso" fusa.
 
 ### 🛠️ Avvio Rapido
 ```bash

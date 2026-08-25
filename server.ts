@@ -2,6 +2,8 @@ import { spawn, type Subprocess } from "bun";
 import { join, resolve, relative, basename, dirname } from "path";
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
+import * as ts from "typescript";
+import * as Diff from "diff";
 
 const PORT = 3001;
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
@@ -1171,63 +1173,180 @@ function scanSecuritySecrets(workspace: string) {
 }
 
 // ========================================================
-// 🗺️ AIDER-STYLE AST REPO MAP (SYMBOL & SIGNATURE EXTRACTOR)
+// 🗺️ REPO MAP (SYMBOL & SIGNATURE EXTRACTOR)
+// ------------------------------------------------------
+// Inspired by Aider's repo-map concept (github.com/Aider-AI/aider), which
+// parses source files with tree-sitter to extract real function/class
+// definitions instead of guessing from raw text.
+//
+// This implementation is HONEST about what it does per language:
+//  - .ts/.tsx/.js/.jsx/.mjs/.cjs  -> parsed with the REAL TypeScript
+//    Compiler API (`typescript` npm package, ts.createSourceFile +
+//    AST traversal via ts.forEachChild). This is a genuine Abstract
+//    Syntax Tree, not a text/regex scan: it correctly ignores strings,
+//    comments, and symbol-shaped text inside template literals, and it
+//    extracts real parameter/return type signatures from the parsed
+//    nodes (FunctionDeclaration, ClassDeclaration + its members,
+//    InterfaceDeclaration, TypeAliasDeclaration, exported const
+//    arrow-functions, EnumDeclaration).
+//  - every other language (Python, Rust, Dart, Go, Java, C/C++, ...)
+//    -> there is no bundled parser for these here, so it falls back to
+//    a line-based regex scan. Each such file is explicitly tagged
+//    "[regex]" in the output so callers/LLMs know it is a heuristic,
+//    not a verified AST, extraction.
 // ========================================================
-function buildAstRepoMap(workspace: string, maxFiles = 30): { mapString: string; totalSymbols: number } {
+
+const AST_PARSEABLE_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs"]);
+
+function scriptKindForExt(ext: string): ts.ScriptKind {
+  switch (ext) {
+    case "tsx": return ts.ScriptKind.TSX;
+    case "jsx": return ts.ScriptKind.JSX;
+    case "js": case "mjs": case "cjs": return ts.ScriptKind.JS;
+    default: return ts.ScriptKind.TS;
+  }
+}
+
+// Real AST extraction using the TypeScript Compiler API.
+function extractSymbolsViaTypeScriptAst(filePath: string, content: string, ext: string): string[] {
+  const symbols: string[] = [];
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    content,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true,
+    scriptKindForExt(ext)
+  );
+
+  const signatureOf = (node: ts.Node): string => {
+    // Grab the node's own text up to the body/brace, trimmed to one line.
+    const full = node.getText(sourceFile);
+    const braceIdx = full.indexOf("{");
+    const arrowBodyIdx = full.indexOf("=>");
+    let cut = full.length;
+    if (braceIdx > -1) cut = Math.min(cut, braceIdx);
+    if (arrowBodyIdx > -1 && arrowBodyIdx < cut) cut = arrowBodyIdx + 2;
+    return full.slice(0, cut).replace(/\s+/g, " ").trim().slice(0, 140);
+  };
+
+  const isExported = (node: ts.Node): boolean => {
+    const mods = (ts as any).canHaveModifiers?.(node) ? ts.getModifiers(node as any) : undefined;
+    return !!mods?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+  };
+
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      symbols.push(signatureOf(node).replace(/^(export\s+)?(default\s+)?/, isExported(node) ? "export " : ""));
+    } else if (ts.isClassDeclaration(node) && node.name) {
+      const heritage = node.heritageClauses?.map(h => h.getText(sourceFile)).join(" ") || "";
+      symbols.push(`${isExported(node) ? "export " : ""}class ${node.name.text}${heritage ? " " + heritage : ""}`);
+      for (const member of node.members) {
+        if (ts.isMethodDeclaration(member) || ts.isConstructorDeclaration(member)) {
+          symbols.push(`  .${signatureOf(member)}`);
+        } else if (ts.isPropertyDeclaration(member) && member.name) {
+          symbols.push(`  .${signatureOf(member)}`);
+        }
+      }
+    } else if (ts.isInterfaceDeclaration(node)) {
+      symbols.push(`${isExported(node) ? "export " : ""}interface ${node.name.text}`);
+    } else if (ts.isTypeAliasDeclaration(node)) {
+      symbols.push(`${isExported(node) ? "export " : ""}type ${node.name.text} = ${node.type.getText(sourceFile).slice(0, 60)}`);
+    } else if (ts.isEnumDeclaration(node)) {
+      symbols.push(`${isExported(node) ? "export " : ""}enum ${node.name.text}`);
+    } else if (ts.isVariableStatement(node)) {
+      for (const decl of node.declarationList.declarations) {
+        if (decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) && ts.isIdentifier(decl.name)) {
+          symbols.push(`${isExported(node) ? "export " : ""}const ${decl.name.text} = ${signatureOf(decl.initializer)}`);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+
+  // Surface real parser diagnostics so a syntactically broken file is
+  // reported honestly rather than silently returning an empty map.
+  const syntacticErrors = (sourceFile as any).parseDiagnostics as ts.Diagnostic[] | undefined;
+  if (syntacticErrors && syntacticErrors.length > 0 && symbols.length === 0) {
+    symbols.push(`[ast-parse-error] ${syntacticErrors.length} syntax error(s) detected by TS parser`);
+  }
+
+  return symbols;
+}
+
+// Fallback line-based heuristic for languages without a bundled AST parser.
+const REGEX_FALLBACK_PATTERNS = [
+  /^(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)/,
+  /^(?:pub\s+)?(?:struct|enum|trait|impl)\s+([a-zA-Z0-9_<>]+)/,
+  /^(?:def|class)\s+([a-zA-Z0-9_]+)\s*(?:\(([^)]*)\))?:/,
+  /^func\s+(?:\([^)]*\)\s*)?([a-zA-Z0-9_]+)\s*\(([^)]*)\)/,
+  /^(?:public|private|protected|static)?\s*(?:class|interface)\s+([a-zA-Z0-9_]+)/,
+  /^(?:abstract\s+)?class\s+([a-zA-Z0-9_]+)/,
+  /^(?:Future<[^>]*>|void|int|double|String|bool|dynamic|var)?\s*([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*(?:async\s*)?\{/ // dart-ish
+];
+
+function extractSymbolsViaRegexFallback(content: string): string[] {
+  const symbols: string[] = [];
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("/*")) continue;
+    for (const rgx of REGEX_FALLBACK_PATTERNS) {
+      const match = trimmed.match(rgx);
+      if (match) {
+        symbols.push(`[regex] ${trimmed.slice(0, 100)}`);
+        break;
+      }
+    }
+    if (symbols.length >= 12) break;
+  }
+  return symbols;
+}
+
+function buildAstRepoMap(workspace: string, maxFiles = 40): { mapString: string; totalSymbols: number; astParsedFiles: number; regexFallbackFiles: number } {
   const mapLines: string[] = [];
   let totalSymbols = 0;
+  let astParsedFiles = 0;
+  let regexFallbackFiles = 0;
 
-  const symbolRegexes = [
-    /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([a-zA-Z0-9_$]+)\s*\(([^)]*)\)/,
-    /^(?:export\s+)?(?:abstract\s+)?class\s+([a-zA-Z0-9_$]+)/,
-    /^(?:export\s+)?interface\s+([a-zA-Z0-9_$]+)/,
-    /^(?:export\s+)?type\s+([a-zA-Z0-9_$]+)\s*=/,
-    /^(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)/,
-    /^(?:pub\s+)?(?:struct|enum|trait)\s+([a-zA-Z0-9_]+)/,
-    /^(?:def|class)\s+([a-zA-Z0-9_]+)\s*(?:\(([^)]*)\))?:/
-  ];
-
-  const scanFileSymbols = (filePath: string) => {
+  const scanFileSymbols = (filePath: string, ext: string) => {
     try {
       const content = readFileSync(filePath, "utf-8");
-      const lines = content.split("\n");
-      const fileSymbols: string[] = [];
+      let fileSymbols: string[];
+      let usedAst = false;
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("/*")) continue;
-
-        for (const rgx of symbolRegexes) {
-          const match = trimmed.match(rgx);
-          if (match) {
-            fileSymbols.push(trimmed.slice(0, 70));
-            totalSymbols++;
-            break;
-          }
-        }
-        if (fileSymbols.length >= 10) break; // Keep top 10 key symbols per file
+      if (AST_PARSEABLE_EXTENSIONS.has(ext)) {
+        fileSymbols = extractSymbolsViaTypeScriptAst(filePath, content, ext).slice(0, 25);
+        usedAst = true;
+      } else {
+        fileSymbols = extractSymbolsViaRegexFallback(content);
       }
 
       if (fileSymbols.length > 0) {
         const rel = relative(workspace, filePath);
-        mapLines.push(`📄 ${rel}:\n  ` + fileSymbols.map(s => `• ${s}`).join("\n  "));
+        const tag = usedAst ? "🌳 AST" : "🔤 regex-fallback";
+        mapLines.push(`📄 ${rel}  [${tag}]:\n  ` + fileSymbols.map(s => `• ${s}`).join("\n  "));
+        totalSymbols += fileSymbols.length;
+        if (usedAst) astParsedFiles++; else regexFallbackFiles++;
       }
     } catch {}
   };
 
   let filesScanned = 0;
   const walk = (dir: string, depth = 0) => {
-    if (depth > 3 || filesScanned >= maxFiles) return;
+    if (depth > 4 || filesScanned >= maxFiles) return;
     try {
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
+        if (filesScanned >= maxFiles) return;
         if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist" || entry.name === "build") continue;
         const full = join(dir, entry.name);
         if (entry.isDirectory()) walk(full, depth + 1);
         else if (entry.isFile()) {
-          const ext = entry.name.split(".").pop() || "";
-          if (["ts", "js", "py", "rs", "dart", "go", "java", "cpp", "c", "vue", "jsx", "tsx"].includes(ext)) {
-            scanFileSymbols(full);
+          const ext = entry.name.split(".").pop()?.toLowerCase() || "";
+          if (["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "dart", "go", "java", "cpp", "c"].includes(ext)) {
+            scanFileSymbols(full, ext);
             filesScanned++;
           }
         }
@@ -1238,7 +1357,9 @@ function buildAstRepoMap(workspace: string, maxFiles = 30): { mapString: string;
   walk(workspace);
   return {
     mapString: mapLines.join("\n\n"),
-    totalSymbols
+    totalSymbols,
+    astParsedFiles,
+    regexFallbackFiles
   };
 }
 
@@ -1324,6 +1445,108 @@ async function pickFolderNative(): Promise<string> {
   } catch {
     return "";
   }
+}
+
+// ========================================================
+// 🧪 REAL MULTI-PROVIDER ENSEMBLE (genuine side-by-side comparison)
+// ------------------------------------------------------
+// Unlike the "Ruflo Swarm" pipeline above (which is 3 sequential calls to
+// the SAME active model/provider with different role prompts, and does not
+// claim otherwise since the honesty audit), this calls 2+ DIFFERENT real
+// cloud providers/models in parallel, with the SAME prompt, and returns
+// each one's actual raw response untouched. There is no voting, no fake
+// "consensus" banner, and no merging of the outputs — the user reads and
+// compares the real answers themselves, the same way you'd open two
+// provider playgrounds side by side.
+// ========================================================
+
+interface EnsembleCandidate {
+  provider: string;
+  modelId: string;
+  displayName: string;
+  endpoint: string;
+  apiKey: string;
+  kind: "openai-compatible" | "gemini" | "anthropic";
+}
+
+function getConfiguredEnsembleCandidates(): EnsembleCandidate[] {
+  const candidates: EnsembleCandidate[] = [];
+
+  if (anthropicApiKey) {
+    candidates.push({ provider: "anthropic", modelId: "claude-3-5-haiku-20241022", displayName: "Anthropic Claude 3.5 Haiku", endpoint: "https://api.anthropic.com/v1/messages", apiKey: anthropicApiKey, kind: "anthropic" });
+  }
+  if (openaiApiKey) {
+    candidates.push({ provider: "openai", modelId: "gpt-4o-mini", displayName: "OpenAI GPT-4o Mini", endpoint: "https://api.openai.com/v1/chat/completions", apiKey: openaiApiKey, kind: "openai-compatible" });
+  }
+  if (groqApiKey) {
+    candidates.push({ provider: "groq", modelId: "llama-3.3-70b-versatile", displayName: "Groq Llama 3.3 70B", endpoint: "https://api.groq.com/openai/v1/chat/completions", apiKey: groqApiKey, kind: "openai-compatible" });
+  }
+  if (cerebrasApiKey) {
+    candidates.push({ provider: "cerebras", modelId: "llama-3.3-70b", displayName: "Cerebras Llama 3.3 70B", endpoint: "https://api.cerebras.ai/v1/chat/completions", apiKey: cerebrasApiKey, kind: "openai-compatible" });
+  }
+  if (mistralApiKey) {
+    candidates.push({ provider: "mistral", modelId: "mistral-small-latest", displayName: "Mistral Small Latest", endpoint: "https://api.mistral.ai/v1/chat/completions", apiKey: mistralApiKey, kind: "openai-compatible" });
+  }
+  if (geminiApiKey) {
+    candidates.push({ provider: "gemini", modelId: "gemini-2.0-flash", displayName: "Google Gemini 2.0 Flash", endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent", apiKey: geminiApiKey, kind: "gemini" });
+  }
+  if (openrouterApiKey) {
+    candidates.push({ provider: "openrouter", modelId: "meta-llama/llama-3.3-70b-instruct:free", displayName: "OpenRouter Llama 3.3 70B (free)", endpoint: "https://openrouter.ai/api/v1/chat/completions", apiKey: openrouterApiKey, kind: "openai-compatible" });
+  }
+
+  return candidates;
+}
+
+async function callEnsembleCandidateNonStreaming(candidate: EnsembleCandidate, systemPrompt: string, userPrompt: string): Promise<{ text: string; latencyMs: number }> {
+  const started = Date.now();
+
+  if (candidate.kind === "anthropic") {
+    const res = await fetch(candidate.endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": candidate.apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: candidate.modelId, max_tokens: 1024, system: systemPrompt, messages: [{ role: "user", content: userPrompt }] }),
+      signal: AbortSignal.timeout(45000)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    const json: any = await res.json();
+    const text = (json.content || []).map((c: any) => c.text || "").join("");
+    return { text, latencyMs: Date.now() - started };
+  }
+
+  if (candidate.kind === "gemini") {
+    const res = await fetch(`${candidate.endpoint}?key=${candidate.apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
+      }),
+      signal: AbortSignal.timeout(45000)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    const json: any = await res.json();
+    const text = json.candidates?.[0]?.content?.parts?.map((p: any) => p.text || "").join("") || "";
+    return { text, latencyMs: Date.now() - started };
+  }
+
+  // openai-compatible
+  const res = await fetch(candidate.endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${candidate.apiKey}` },
+    body: JSON.stringify({
+      model: candidate.modelId,
+      messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
+      temperature: 0.7,
+      max_tokens: 1024,
+      stream: false
+    }),
+    signal: AbortSignal.timeout(45000)
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const json: any = await res.json();
+  const text = json.choices?.[0]?.message?.content || "";
+  return { text, latencyMs: Date.now() - started };
 }
 
 const server = Bun.serve({
@@ -1682,6 +1905,115 @@ const server = Bun.serve({
           }
           const content = readFileSync(filePath, "utf-8");
           return new Response(JSON.stringify({ name: basename(filePath), path: filePath, content }), { headers });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+        }
+      }
+
+      // 6a-diff-1. Workspace: Real Unified-Diff Preview (Continue.dev "Apply" style)
+      // Computes a genuine unified diff (Myers algorithm, via the `diff` npm
+      // package) between the file's current on-disk content and LLM-proposed
+      // new content. No write happens here — this is preview-only so the
+      // caller/user can review before applying.
+      if (url.pathname === "/api/workspace/file/diff-preview" && req.method === "POST") {
+        try {
+          const body: any = await req.json();
+          const filePath = resolve(body.filePath || "");
+          const newContent: string = body.newContent ?? "";
+
+          if (!filePath) {
+            return new Response(JSON.stringify({ error: "filePath obbligatorio" }), { status: 400, headers });
+          }
+          const workspaceRoot = resolve(body.workspace || attachedWorkspacePath);
+          const relToWorkspace = relative(workspaceRoot, filePath);
+          if (relToWorkspace.startsWith("..") || resolve(workspaceRoot, relToWorkspace) !== filePath) {
+            return new Response(JSON.stringify({ error: "Il file deve trovarsi dentro il workspace attaccato" }), { status: 403, headers });
+          }
+
+          const fileExists = existsSync(filePath);
+          const oldContent = fileExists ? readFileSync(filePath, "utf-8") : "";
+
+          const unifiedDiff = Diff.createTwoFilesPatch(
+            fileExists ? relative(workspaceRoot, filePath) : "/dev/null",
+            relative(workspaceRoot, filePath),
+            oldContent,
+            newContent,
+            fileExists ? "current" : "new file",
+            "proposed"
+          );
+
+          const lineChanges = Diff.diffLines(oldContent, newContent);
+          let added = 0, removed = 0;
+          for (const part of lineChanges) {
+            const n = part.value.split("\n").length - 1;
+            if (part.added) added += n;
+            else if (part.removed) removed += n;
+          }
+
+          return new Response(JSON.stringify({
+            filePath,
+            fileExists,
+            unifiedDiff,
+            linesAdded: added,
+            linesRemoved: removed,
+            identical: oldContent === newContent
+          }), { headers });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+        }
+      }
+
+      // 6a-diff-2. Workspace: Apply the diff for real (writes to disk).
+      // Optionally pass expectedOldContent to guard against clobbering a file
+      // that changed on disk since the preview was generated (optimistic
+      // concurrency check).
+      if (url.pathname === "/api/workspace/file/diff-apply" && req.method === "POST") {
+        try {
+          const body: any = await req.json();
+          const filePath = resolve(body.filePath || "");
+          const newContent: string = body.newContent ?? "";
+          const expectedOldContent: string | undefined = body.expectedOldContent;
+
+          if (!filePath) {
+            return new Response(JSON.stringify({ error: "filePath obbligatorio" }), { status: 400, headers });
+          }
+          const workspaceRoot = resolve(body.workspace || attachedWorkspacePath);
+          const relToWorkspace = relative(workspaceRoot, filePath);
+          if (relToWorkspace.startsWith("..") || resolve(workspaceRoot, relToWorkspace) !== filePath) {
+            return new Response(JSON.stringify({ error: "Il file deve trovarsi dentro il workspace attaccato" }), { status: 403, headers });
+          }
+
+          const fileExists = existsSync(filePath);
+          const currentContent = fileExists ? readFileSync(filePath, "utf-8") : "";
+
+          if (typeof expectedOldContent === "string" && expectedOldContent !== currentContent) {
+            return new Response(JSON.stringify({
+              error: "Conflitto: il file è cambiato su disco dopo la preview. Rigenera la diff prima di applicare.",
+              conflict: true
+            }), { status: 409, headers });
+          }
+
+          // Ensure parent directory exists for genuinely new files.
+          const parentDir = dirname(filePath);
+          if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
+
+          writeFileSync(filePath, newContent, "utf-8");
+
+          saveProjectInsight(
+            workspaceRoot,
+            `diff-apply:${relative(workspaceRoot, filePath)}`.slice(0, 40),
+            `Applicata modifica reale via diff-apply su ${relative(workspaceRoot, filePath)} (${new Date().toLocaleString()})`,
+            ["diff-apply", "edit"]
+          );
+
+          server.publish("claude-studio", JSON.stringify({ type: "file_diff_applied", filePath, bytesWritten: newContent.length }));
+
+          return new Response(JSON.stringify({
+            success: true,
+            filePath,
+            bytesWritten: Buffer.byteLength(newContent, "utf-8"),
+            wasNewFile: !fileExists
+          }), { headers });
         } catch (e: any) {
           return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
         }
@@ -2052,6 +2384,51 @@ const server = Bun.serve({
         return new Response(JSON.stringify(repoMap), { headers });
       }
 
+      // 6j. Agent: Real Multi-Provider Ensemble (genuine parallel comparison, no fake consensus)
+      if (url.pathname === "/api/agent/ensemble" && req.method === "POST") {
+        try {
+          const body: any = await req.json();
+          const prompt: string = body.prompt || "";
+          if (!prompt.trim()) {
+            return new Response(JSON.stringify({ error: "prompt obbligatorio" }), { status: 400, headers });
+          }
+
+          const candidates = getConfiguredEnsembleCandidates();
+          if (candidates.length < 2) {
+            return new Response(JSON.stringify({
+              error: `Servono almeno 2 provider cloud configurati per un confronto reale (attualmente configurati: ${candidates.length}). Aggiungi chiavi API in 'API Keys & Free Providers'.`,
+              configuredProviders: candidates.map(c => c.provider)
+            }), { status: 400, headers });
+          }
+
+          const selected = candidates.slice(0, Math.min(candidates.length, body.maxProviders || 4));
+          const systemPrompt = `Sei un assistente di coding. Rispondi in modo diretto e conciso al task richiesto dall'utente. Workspace: ${attachedWorkspacePath}.`;
+
+          const results = await Promise.allSettled(
+            selected.map(c => callEnsembleCandidateNonStreaming(c, systemPrompt, prompt))
+          );
+
+          const payload = selected.map((c, i) => {
+            const r = results[i];
+            if (r.status === "fulfilled") {
+              return { provider: c.provider, modelId: c.modelId, displayName: c.displayName, ok: true, text: r.value.text, latencyMs: r.value.latencyMs };
+            }
+            return { provider: c.provider, modelId: c.modelId, displayName: c.displayName, ok: false, error: String((r as PromiseRejectedResult).reason?.message || r.reason) };
+          });
+
+          saveProjectInsight(
+            attachedWorkspacePath,
+            `ensemble:${prompt.slice(0, 30)}`,
+            `Confronto reale multi-provider (${selected.map(c => c.provider).join(", ")}) eseguito il ${new Date().toLocaleString()}`,
+            ["ensemble", "multi-provider"]
+          );
+
+          return new Response(JSON.stringify({ prompt, providers: payload }), { headers });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+        }
+      }
+
       // 10. Run Full Agent Prompt Pipeline (Standard, Swarm, Diagrams & @Mentions)
       if (url.pathname === "/api/agent/run" && req.method === "POST") {
         try {
@@ -2130,7 +2507,7 @@ ${fileList}
 Linguaggi/Framework rilevati: ${ctx.frameworks?.join(", ")}
 ${ctx.rulesSnippet ? `\n--- 📜 REGOLE DI PROGETTO ATTIVE (${ctx.rulesFileName}) ---\n${ctx.rulesSnippet}\n----------------------------------------------------\n` : ''}
 ${ctx.memorySnippet ? `\n--- 🧠 MEMORIA STORICA AGENTDB / RUVECTOR ---\n${ctx.memorySnippet}\n------------------------------------------------\n` : ''}
-${repoMap.mapString ? `\n--- 🗺️ AST REPO MAP (Simboli, Firme e Interfacce Estratte) ---\n${repoMap.mapString}\n------------------------------------------------------------\n` : ''}
+${repoMap.mapString ? `\n--- 🗺️ REPO MAP (${repoMap.astParsedFiles} file via TypeScript Compiler API AST reale, ${repoMap.regexFallbackFiles} file via fallback regex) ---\n${repoMap.mapString}\n------------------------------------------------------------\n` : ''}
 ${injectedContext}
 ${roleSpecialization}
 Modelli LLM realmente installati in locale nel sistema (Ollama):
