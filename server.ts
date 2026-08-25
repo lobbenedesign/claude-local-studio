@@ -4,6 +4,7 @@ import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSy
 import { homedir } from "os";
 import * as ts from "typescript";
 import * as Diff from "diff";
+import TSParser from "web-tree-sitter";
 
 const PORT = 3001;
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
@@ -1371,6 +1372,91 @@ function extractSymbolsViaTypeScriptAst(filePath: string, content: string, ext: 
   return symbols;
 }
 
+// Real multi-language AST via tree-sitter (Aider/Continue style, reale non regex).
+// Grammatiche WASM precompilate (tree-sitter-wasms) caricate una volta all'avvio.
+// Se il caricamento fallisce per un linguaggio (es. build incompatibile, come
+// osservato per Dart/ABI 15 con questo runtime), quel linguaggio ricade
+// onestamente sul regex fallback esistente invece di rompersi silenziosamente.
+interface TreeSitterLangConfig {
+  wasmFile: string;
+  containerTypes: Set<string>;
+  functionTypes: Set<string>;
+  nodeFilter?: (node: any) => boolean;
+}
+
+const TREE_SITTER_LANG_CONFIG: Record<string, TreeSitterLangConfig> = {
+  py: { wasmFile: "tree-sitter-python.wasm", containerTypes: new Set(["class_definition"]), functionTypes: new Set(["function_definition"]) },
+  rs: { wasmFile: "tree-sitter-rust.wasm", containerTypes: new Set(["struct_item", "enum_item", "trait_item", "impl_item"]), functionTypes: new Set(["function_item", "function_signature_item"]) },
+  go: { wasmFile: "tree-sitter-go.wasm", containerTypes: new Set(), functionTypes: new Set(["type_declaration", "function_declaration", "method_declaration"]) },
+  java: { wasmFile: "tree-sitter-java.wasm", containerTypes: new Set(["class_declaration", "interface_declaration", "enum_declaration"]), functionTypes: new Set(["method_declaration", "constructor_declaration"]) },
+  c: { wasmFile: "tree-sitter-c.wasm", containerTypes: new Set(["struct_specifier"]), functionTypes: new Set(["function_definition"]) },
+  cpp: { wasmFile: "tree-sitter-cpp.wasm", containerTypes: new Set(["class_specifier", "struct_specifier"]), functionTypes: new Set(["function_definition", "field_declaration"]), nodeFilter: (n) => n.type !== "field_declaration" || (n.text as string).includes("(") },
+};
+
+const EXT_TO_TREE_SITTER_LANG: Record<string, string> = {
+  py: "py", rs: "rs", go: "go", java: "java", c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp"
+};
+
+const TREE_SITTER_LANG_CACHE: Record<string, any> = {};
+
+async function initTreeSitterLanguages() {
+  try {
+    await TSParser.init();
+    for (const [key, cfg] of Object.entries(TREE_SITTER_LANG_CONFIG)) {
+      try {
+        const wasmPath = join(import.meta.dir, "node_modules", "tree-sitter-wasms", "out", cfg.wasmFile);
+        TREE_SITTER_LANG_CACHE[key] = await TSParser.Language.load(wasmPath);
+      } catch (e: any) {
+        console.error(`[tree-sitter] grammatica reale per '${key}' non caricata, questo linguaggio userà il fallback regex: ${e.message}`);
+      }
+    }
+    console.log(`🌳 Tree-sitter AST reale attivo per: ${Object.keys(TREE_SITTER_LANG_CACHE).join(", ") || "nessuno (fallback regex per tutti)"}`);
+  } catch (e: any) {
+    console.error(`[tree-sitter] init del runtime WASM fallito, repo map multi-linguaggio userà solo il fallback regex: ${e.message}`);
+  }
+}
+await initTreeSitterLanguages();
+
+// Real AST extraction via tree-sitter per Python/Rust/Go/Java/C/C++.
+// Ritorna null se la grammatica non è disponibile (il chiamante ricade sul regex fallback).
+function extractSymbolsViaTreeSitter(langKey: string, content: string): string[] | null {
+  const lang = TREE_SITTER_LANG_CACHE[langKey];
+  const cfg = TREE_SITTER_LANG_CONFIG[langKey];
+  if (!lang || !cfg) return null;
+
+  const parser = new TSParser();
+  parser.setLanguage(lang);
+  const tree = parser.parse(content);
+  if (!tree) { parser.delete(); return null; }
+
+  const signatureOf = (node: any): string => {
+    const full = node.text as string;
+    const braceIdx = full.indexOf("{");
+    const colonIdx = full.indexOf(":");
+    let cut = full.length;
+    if (braceIdx > -1) cut = Math.min(cut, braceIdx);
+    if (langKey === "py" && colonIdx > -1 && colonIdx < cut) cut = colonIdx + 1;
+    return full.slice(0, cut).replace(/\s+/g, " ").trim().slice(0, 140);
+  };
+
+  const symbols: string[] = [];
+  const visit = (node: any, containerDepth: number) => {
+    if (symbols.length >= 25) return;
+    const isContainer = cfg.containerTypes.has(node.type);
+    const isFunction = cfg.functionTypes.has(node.type);
+    if ((isContainer || isFunction) && (!cfg.nodeFilter || cfg.nodeFilter(node))) {
+      const sig = signatureOf(node);
+      if (sig) symbols.push(containerDepth > 0 && isFunction ? `  .${sig}` : sig);
+    }
+    for (let i = 0; i < node.childCount; i++) {
+      visit(node.child(i), containerDepth + (isContainer ? 1 : 0));
+    }
+  };
+  visit(tree.rootNode, 0);
+  parser.delete();
+  return symbols;
+}
+
 // Fallback line-based heuristic for languages without a bundled AST parser.
 const REGEX_FALLBACK_PATTERNS = [
   /^(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)/,
@@ -1400,31 +1486,42 @@ function extractSymbolsViaRegexFallback(content: string): string[] {
   return symbols;
 }
 
-function buildAstRepoMap(workspace: string, maxFiles = 40): { mapString: string; totalSymbols: number; astParsedFiles: number; regexFallbackFiles: number } {
+function buildAstRepoMap(workspace: string, maxFiles = 40): { mapString: string; totalSymbols: number; astParsedFiles: number; treeSitterParsedFiles: number; regexFallbackFiles: number } {
   const mapLines: string[] = [];
   let totalSymbols = 0;
   let astParsedFiles = 0;
+  let treeSitterParsedFiles = 0;
   let regexFallbackFiles = 0;
 
   const scanFileSymbols = (filePath: string, ext: string) => {
     try {
       const content = readFileSync(filePath, "utf-8");
       let fileSymbols: string[];
-      let usedAst = false;
+      let tag: string;
+
+      const treeSitterLangKey = EXT_TO_TREE_SITTER_LANG[ext];
+      const treeSitterSymbols = treeSitterLangKey ? extractSymbolsViaTreeSitter(treeSitterLangKey, content) : null;
 
       if (AST_PARSEABLE_EXTENSIONS.has(ext)) {
         fileSymbols = extractSymbolsViaTypeScriptAst(filePath, content, ext).slice(0, 25);
-        usedAst = true;
+        tag = "🌳 AST";
+        astParsedFiles++;
+      } else if (treeSitterSymbols !== null) {
+        // Grammatica reale caricata: usiamo il risultato anche se vuoto (file senza
+        // dichiarazioni riconoscibili), non ricadiamo sul regex solo perché è 0.
+        fileSymbols = treeSitterSymbols;
+        tag = "🌳 tree-sitter AST";
+        treeSitterParsedFiles++;
       } else {
         fileSymbols = extractSymbolsViaRegexFallback(content);
+        tag = "🔤 regex-fallback";
+        regexFallbackFiles++;
       }
 
       if (fileSymbols.length > 0) {
         const rel = relative(workspace, filePath);
-        const tag = usedAst ? "🌳 AST" : "🔤 regex-fallback";
         mapLines.push(`📄 ${rel}  [${tag}]:\n  ` + fileSymbols.map(s => `• ${s}`).join("\n  "));
         totalSymbols += fileSymbols.length;
-        if (usedAst) astParsedFiles++; else regexFallbackFiles++;
       }
     } catch {}
   };
@@ -1441,7 +1538,7 @@ function buildAstRepoMap(workspace: string, maxFiles = 40): { mapString: string;
         if (entry.isDirectory()) walk(full, depth + 1);
         else if (entry.isFile()) {
           const ext = entry.name.split(".").pop()?.toLowerCase() || "";
-          if (["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "dart", "go", "java", "cpp", "c"].includes(ext)) {
+          if (["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "dart", "go", "java", "cpp", "cc", "cxx", "hpp", "c", "h"].includes(ext)) {
             scanFileSymbols(full, ext);
             filesScanned++;
           }
@@ -1455,6 +1552,7 @@ function buildAstRepoMap(workspace: string, maxFiles = 40): { mapString: string;
     mapString: mapLines.join("\n\n"),
     totalSymbols,
     astParsedFiles,
+    treeSitterParsedFiles,
     regexFallbackFiles
   };
 }
@@ -2612,7 +2710,7 @@ ${fileList}
 Linguaggi/Framework rilevati: ${ctx.frameworks?.join(", ")}
 ${ctx.rulesSnippet ? `\n--- 📜 REGOLE DI PROGETTO ATTIVE (${ctx.rulesFileName}) ---\n${ctx.rulesSnippet}\n----------------------------------------------------\n` : ''}
 ${ctx.memorySnippet ? `\n--- 🧠 MEMORIA STORICA AGENTDB / RUVECTOR ---\n${ctx.memorySnippet}\n------------------------------------------------\n` : ''}
-${repoMap.mapString ? `\n--- 🗺️ REPO MAP (${repoMap.astParsedFiles} file via TypeScript Compiler API AST reale, ${repoMap.regexFallbackFiles} file via fallback regex) ---\n${repoMap.mapString}\n------------------------------------------------------------\n` : ''}
+${repoMap.mapString ? `\n--- 🗺️ REPO MAP (${repoMap.astParsedFiles} file via TypeScript Compiler API AST reale, ${repoMap.treeSitterParsedFiles} file via tree-sitter AST reale multi-linguaggio, ${repoMap.regexFallbackFiles} file via fallback regex) ---\n${repoMap.mapString}\n------------------------------------------------------------\n` : ''}
 ${injectedContext}
 ${roleSpecialization}
 Modelli LLM realmente installati in locale nel sistema (Ollama):
