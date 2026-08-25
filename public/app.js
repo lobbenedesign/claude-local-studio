@@ -1331,12 +1331,16 @@ async function runAgentPrompt(prompt) {
   consoleOutput.appendChild(userEntry);
 
   const checkSwarmMode = document.getElementById("check-swarm-mode");
+  const checkMultiProviderSwarm = document.getElementById("check-multi-provider-swarm");
   const isSwarm = !!(checkSwarmMode && checkSwarmMode.checked) || prompt.startsWith("/swarm") || prompt.startsWith("/ruflo");
+  const isMultiProviderSwarm = isSwarm && !!(checkMultiProviderSwarm && checkMultiProviderSwarm.checked);
 
   const assistantEntry = document.createElement("div");
   assistantEntry.className = "console-entry assistant";
   assistantEntry.id = "current-streaming-entry";
-  assistantEntry.textContent = isSwarm 
+  assistantEntry.textContent = isMultiProviderSwarm
+    ? `🐝🌐 Swarm Multi-Provider REALE in avvio (Architetto/Coder/Reviewer su provider cloud diversi)...`
+    : isSwarm
     ? `🐝 Ruflo Swarm Pipeline in avvio con ${activeModel} (Architetto -> Coder -> Reviewer)...`
     : `Custom Claude Coder sta elaborando con ${activeModel}...`;
   consoleOutput.appendChild(assistantEntry);
@@ -1351,7 +1355,8 @@ async function runAgentPrompt(prompt) {
       body: JSON.stringify({
         prompt,
         workspace: attachedWorkspacePath,
-        swarmMode: isSwarm
+        swarmMode: isSwarm,
+        multiProviderSwarm: isMultiProviderSwarm
       })
     });
 

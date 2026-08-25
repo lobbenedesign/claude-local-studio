@@ -2565,6 +2565,7 @@ const server = Bun.serve({
           } catch {}
 
           const isSwarmMode = !!body.swarmMode || mentionedPrompt.startsWith("/swarm") || mentionedPrompt.startsWith("/ruflo");
+          const isMultiProviderSwarm = isSwarmMode && !!body.multiProviderSwarm;
           const isDiagramMode = mentionedPrompt.startsWith("/diagram");
           const isPrdMode = mentionedPrompt.startsWith("/prd");
           const isReviewMode = mentionedPrompt.startsWith("/review");
@@ -2626,9 +2627,96 @@ Fornisci risposte complete, codice pulito e pronto all'uso, spiegazioni chiare e
 
           (async () => {
             try {
-              if (isSwarmMode) {
+              const multiProviderCandidates = isMultiProviderSwarm ? getConfiguredEnsembleCandidates() : [];
+              const effectiveMultiProviderSwarm = isMultiProviderSwarm && multiProviderCandidates.length >= 2;
+              if (isMultiProviderSwarm && !effectiveMultiProviderSwarm) {
+                await writer.write(encoder.encode(
+                  `\n⚠️ [SWARM MULTI-PROVIDER RICHIESTO MA NON DISPONIBILE]\nServono almeno 2 provider cloud configurati (attualmente: ${multiProviderCandidates.length}) per un vero swarm multi-modello. Aggiungi chiavi API in 'API Keys & Free Providers'.\nEseguo la pipeline in modalità standard (singolo modello) come fallback onesto.\n════════════════════════════════════════════════════════════════\n`
+                ));
+              }
+
+              if (isSwarmMode && effectiveMultiProviderSwarm) {
                 // ========================================================
-                // 🐝 RUFLO MULTI-AGENT SWARM LOOP (3-Phase Consensus)
+                // 🐝🌐 REAL MULTI-PROVIDER SWARM (Architect/Coder su provider
+                // cloud DIVERSI + Reviewer che produce un verdetto JSON
+                // strutturato realmente parsato, non solo testo da rileggere)
+                // ========================================================
+                const candidates = multiProviderCandidates;
+
+                await writer.write(encoder.encode(`\n🐝🌐 [SWARM MULTI-PROVIDER REALE AVVIATO]\n════════════════════════════════════════════════════════════════\n`));
+
+                // Round-robin reale su provider DIVERSI configurati (non lo stesso modello riusato)
+                const architectCandidate = candidates[0];
+                const coderCandidate = candidates[1 % candidates.length];
+                const reviewerCandidate = candidates[2 % candidates.length];
+                const usingDistinctReviewer = candidates.length >= 3;
+
+                const runMultiProviderPhase = async (phaseTitle: string, candidate: EnsembleCandidate | undefined, roleSystem: string, userTask: string): Promise<string> => {
+                  if (!candidate) {
+                    await writer.write(encoder.encode(`\n${phaseTitle}\n[Nessun provider disponibile per questa fase]\n`));
+                    return "";
+                  }
+                  await writer.write(encoder.encode(`\n${phaseTitle} — provider reale: ${candidate.displayName}\n────────────────────────────────────────────────────────────────\n`));
+                  server.publish("claude-studio", JSON.stringify({ type: "agent_output", data: `\n${phaseTitle} — ${candidate.displayName}\n` }));
+                  try {
+                    const { text, latencyMs } = await callEnsembleCandidateNonStreaming(candidate, `${systemPrompt}\n\n${roleSystem}`, userTask);
+                    await writer.write(encoder.encode(`${text}\n[latenza reale: ${latencyMs}ms]\n`));
+                    server.publish("claude-studio", JSON.stringify({ type: "agent_output", data: `${text}\n` }));
+                    return text;
+                  } catch (e: any) {
+                    const msg = `[Errore reale su ${candidate.displayName}]: ${e.message}`;
+                    await writer.write(encoder.encode(`${msg}\n`));
+                    return "";
+                  }
+                };
+
+                const architectOutput = await runMultiProviderPhase(
+                  "🏗️ FASE 1: SYSTEM ARCHITECT",
+                  architectCandidate,
+                  "RUOLO: Sei il System Architect di uno swarm multi-provider. Analizza il workspace, scompone i requisiti in moduli, definisce i contratti delle interfacce e stila il piano di esecuzione passo-passo.",
+                  `Task: ${cleanPrompt}\n\nFornisci l'analisi architetturale e il piano dettagliato per l'implementazione.`
+                );
+
+                const coderOutput = await runMultiProviderPhase(
+                  "💻 FASE 2: CORE CODER",
+                  coderCandidate,
+                  "RUOLO: Sei il Core Coder di uno swarm multi-provider. Basandoti sul piano dell'Architetto (scritto da un modello diverso da te), scrivi il codice sorgente completo, modulare, pulito e privo di placeholder o commenti 'TODO'.",
+                  `Obiettivo Utente: ${cleanPrompt}\n\nPiano Architetturale (da un altro provider):\n${architectOutput}\n\nGenera ora il codice completo per tutti i file necessari.`
+                );
+
+                const reviewerRoleSystem = "RUOLO: Sei il Code Reviewer & Quality Judge indipendente di uno swarm multi-provider. Analizza il codice generato da un modello diverso da te, verifica bug, vulnerabilità e aderenza alle regole di progetto. Alla FINE della tua risposta, DEVI includere un blocco JSON valido su una riga separata con ESATTAMENTE questo formato, senza testo extra dentro il blocco: {\"verdict\": \"PASS\" oppure \"FAIL\", \"score\": numero da 0 a 10, \"issues\": [\"lista di problemi trovati, vuota se nessuno\"]}";
+                const reviewerOutput = await runMultiProviderPhase(
+                  "🔍 FASE 3: CODE REVIEWER & JUDGE",
+                  reviewerCandidate,
+                  reviewerRoleSystem,
+                  `Codice Generato dal Coder (provider diverso):\n${coderOutput}\n\nEsegui la revisione formale, l'audit di sicurezza, e termina con il blocco JSON del verdetto come richiesto dal tuo ruolo.`
+                );
+
+                // Parsing REALE del verdetto strutturato: se il modello non rispetta il formato,
+                // lo dichiariamo onestamente invece di fingere un badge PASS/FAIL.
+                let verdictBadge = "⚠️ Verdetto non strutturato: il Reviewer non ha prodotto un blocco JSON valido, leggi il testo sopra.";
+                const jsonMatch = reviewerOutput.match(/\{[^{}]*"verdict"[^{}]*\}/s);
+                if (jsonMatch) {
+                  try {
+                    const verdict = JSON.parse(jsonMatch[0]);
+                    if (verdict.verdict === "PASS" || verdict.verdict === "FAIL") {
+                      verdictBadge = `${verdict.verdict === "PASS" ? "✅" : "❌"} VERDETTO REALE PARSATO: ${verdict.verdict} — Score: ${verdict.score}/10${Array.isArray(verdict.issues) && verdict.issues.length > 0 ? ` — Issues: ${verdict.issues.join("; ")}` : " — Nessun issue segnalato"}`;
+                    }
+                  } catch {}
+                }
+                await writer.write(encoder.encode(`\n${verdictBadge}\n`));
+
+                await saveProjectInsight(
+                  workspace,
+                  cleanPrompt.slice(0, 35),
+                  `Swarm multi-provider reale (Architect=${architectCandidate?.provider ?? "n/a"}, Coder=${coderCandidate?.provider ?? "n/a"}, Reviewer=${reviewerCandidate?.provider ?? "n/a"}${usingDistinctReviewer ? "" : ", reviewer NON distinto per provider insufficienti"}) — ${verdictBadge.startsWith("✅") || verdictBadge.startsWith("❌") ? verdictBadge : "verdetto non strutturato"} (${new Date().toLocaleDateString()})`,
+                  ["swarm", "multi-provider"]
+                );
+
+                await writer.write(encoder.encode(`\n════════════════════════════════════════════════════════════════\n✅ [SWARM MULTI-PROVIDER COMPLETATO${usingDistinctReviewer ? " - 3 PROVIDER DISTINTI" : " - PROVIDER RIUSATI PER SCARSITÀ DI CHIAVI CONFIGURATE"} - MEMORIZZATO IN AGENTDB]\n`));
+              } else if (isSwarmMode) {
+                // ========================================================
+                // 🐝 RUFLO MULTI-AGENT SWARM LOOP (3-Phase Consensus, singolo modello)
                 // ========================================================
                 await writer.write(encoder.encode(`\n🐝 [RUFLO MULTI-AGENT SWARM PIPELINE AVVIATA]\n════════════════════════════════════════════════════════════════\n`));
 
