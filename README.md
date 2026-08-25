@@ -112,9 +112,9 @@ Open **`http://localhost:3001`** in your browser.
 #### 5. 🎙️ Dettatura Vocale Hands-Free (Web Speech API del browser)
 * Trascrizione vocale in tempo reale usando l'API nativa `SpeechRecognition` del browser (Chrome/Edge). Non è integrato alcun modello Whisper: l'accuratezza e le lingue supportate dipendono dal motore del browser, non da questo progetto.
 
-#### 6. 🧠 Memoria Gerarchica a 3 Livelli (file JSON, non un DB vettoriale)
+#### 6. 🧠 Memoria Gerarchica a 3 Livelli (file JSON + embedding vettoriali reali)
 * **Working Scratchpad** (focus immediato), **Episodic Memories** (azioni recenti), **Archival Base** (regole persistenti).
-* La memorizzazione avviene in un semplice file JSON per progetto (`.claude/agentdb.json`): nessun embedding, nessun indice vettoriale, nessuna ricerca per similarità semantica. Il recupero restituisce semplicemente le N voci più recenti.
+* La memorizzazione avviene in un semplice file JSON per progetto (`.claude/agentdb.json`), ma ogni insight salvato ha ora un **embedding vettoriale reale a 384 dimensioni**: se Ollama espone `nomic-embed-text` viene usato quel modello (`/api/embeddings`), altrimenti si ricade su un embedding deterministico hash-based (trigram + subword) come fallback. Il recupero usato nei prompt non prende più semplicemente le N voci più recenti, ma calcola la **similarità coseno reale** tra l'embedding della richiesta corrente e quello di ogni memoria salvata, restituendo le più pertinenti anche se non le più recenti. Le memorie preesistenti senza embedding lo calcolano e lo persistono in modo lazy al primo utilizzo.
 
 #### 7. ⚡ Dev Server Multiplexer (`cmux`) & Controllo Mobile (Telegram)
 * Gestione di processi dev paralleli in background e controllo remoto da smartphone via bot Telegram sicuro.
