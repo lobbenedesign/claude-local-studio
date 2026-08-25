@@ -39,8 +39,16 @@
 * Live rendering of interactive color diagrams (flowcharts, sequence diagrams, class models, ER graphs) directly in the console with `/diagram`.
 * Generates structured Product Requirement Documents (PRDs) with `/prd`.
 
-#### 5. 🎙️ Hands-Free Voice-to-Code (Browser Web Speech API)
-* Real-time voice dictation directly into the prompt box using the browser's native `SpeechRecognition` API (Chrome/Edge). No Whisper model is bundled or invoked — it relies entirely on the browser's built-in engine, so accuracy and language support depend on the browser, not on this project.
+#### 5. 🎙️ Hands-Free Voice-to-Code — Browser Speech API **and** real local Whisper (gap closed)
+* **"Dettatura" button**: real-time voice dictation using the browser's native `SpeechRecognition` API (Chrome/Edge). No Whisper model involved here — accuracy and language support depend on the browser.
+* **"Whisper Locale" button (new, genuinely real)**: records audio with the browser's `MediaRecorder`, uploads it to a new `/api/voice/transcribe` endpoint, which converts it to 16kHz mono WAV via `ffmpeg` and transcribes it with a real, locally-running **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** process (`whisper-cli`) using an actual GGML model — not a stub, not a browser API pass-through. Requires two things this repo does **not** bundle (by design, they're too large/binary for a source repo): `brew install whisper-cpp`, and a GGML model downloaded into `whisper-models/` (see setup below). If either is missing, or `ffmpeg` isn't installed, the endpoint returns a clear, actionable error instead of silently falling back to the browser engine or faking a transcript.
+* **Setup** (macOS, one-time):
+  ```bash
+  brew install whisper-cpp ffmpeg
+  mkdir -p whisper-models
+  curl -L -o whisper-models/ggml-base.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+  ```
+* Verified end-to-end with real audio (a synthesized Italian sentence via macOS `say`, converted to webm/opus exactly as a browser `MediaRecorder` would produce): the full pipeline (upload → ffmpeg conversion → whisper.cpp transcription → JSON parse) correctly returned the real transcript.
 
 #### 6. 🧠 3-Tier Hierarchical Memory (JSON file, not a vector DB)
 * **Tier 1 (Working Scratchpad)**: immediate task status and focus.
@@ -115,8 +123,16 @@ Open **`http://localhost:3001`** in your browser.
 #### 4. 🎨 Diagrammi Architetturali & Specifiche PRD (MetaGPT / Mermaid)
 * Renderizza visualmente grafi a colori direttamente nella console con `/diagram` e redige specifiche complete con `/prd`.
 
-#### 5. 🎙️ Dettatura Vocale Hands-Free (Web Speech API del browser)
-* Trascrizione vocale in tempo reale usando l'API nativa `SpeechRecognition` del browser (Chrome/Edge). Non è integrato alcun modello Whisper: l'accuratezza e le lingue supportate dipendono dal motore del browser, non da questo progetto.
+#### 5. 🎙️ Dettatura Vocale Hands-Free — Web Speech API del browser **e** Whisper locale reale (gap ora colmato)
+* **Pulsante "Dettatura"**: trascrizione vocale in tempo reale usando l'API nativa `SpeechRecognition` del browser (Chrome/Edge). Qui nessun modello Whisper è coinvolto: l'accuratezza e le lingue dipendono dal browser.
+* **Pulsante "Whisper Locale" (nuovo, realmente reale)**: registra l'audio con il `MediaRecorder` del browser, lo invia a un nuovo endpoint `/api/voice/transcribe`, che lo converte in WAV 16kHz mono via `ffmpeg` e lo trascrive con un processo **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** reale in esecuzione locale (`whisper-cli`) usando un vero modello GGML — non uno stub, non un passthrough dell'API del browser. Richiede due cose che questo repo non include (di proposito, sono troppo grandi/binarie per un repo sorgente): `brew install whisper-cpp`, e un modello GGML scaricato in `whisper-models/` (vedi setup sotto). Se manca l'uno o l'altro, o se manca `ffmpeg`, l'endpoint restituisce un errore chiaro e azionabile invece di ricadere silenziosamente sul motore del browser o fingere una trascrizione.
+* **Setup** (macOS, una tantum):
+  ```bash
+  brew install whisper-cpp ffmpeg
+  mkdir -p whisper-models
+  curl -L -o whisper-models/ggml-base.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+  ```
+* Verificato end-to-end con audio reale (una frase italiana sintetizzata via `say` di macOS, convertita in webm/opus esattamente come farebbe un `MediaRecorder` da browser): l'intera pipeline (upload → conversione ffmpeg → trascrizione whisper.cpp → parsing JSON) ha restituito correttamente la trascrizione reale.
 
 #### 6. 🧠 Memoria Gerarchica a 3 Livelli (file JSON + embedding vettoriali reali)
 * **Working Scratchpad** (focus immediato), **Episodic Memories** (azioni recenti), **Archival Base** (regole persistenti).

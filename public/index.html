@@ -321,11 +321,16 @@
                       <span style="font-weight: 500;">🌐 Multi-Provider Reale</span>
                     </label>
                     <span class="tag" id="voice-status-tag" style="display: none; background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444;">🎙️ Ascolto in corso...</span>
+                    <span class="tag" id="whisper-status-tag" style="display: none; background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444;">🔴 Registrazione Whisper...</span>
                   </div>
                   <div style="display: flex; gap: 8px; align-items: center; margin-left: auto;">
                     <button type="button" class="btn btn-secondary" id="btn-voice-dictation" onclick="window.toggleVoiceDictation ? window.toggleVoiceDictation() : null" title="Dettatura vocale Hands-Free (Web SpeechRecognition del browser, non Whisper)">
                       <span id="voice-icon">🎙️</span>
                       <span id="voice-label" style="font-size: 12px;">Dettatura</span>
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="btn-whisper-dictation" onclick="window.toggleWhisperDictation ? window.toggleWhisperDictation() : null" title="Trascrizione Whisper REALE in locale (whisper.cpp), non l'API del browser. Richiede whisper-cli + modello ggml-base.bin installati (vedi README).">
+                      <span id="whisper-icon">🧠</span>
+                      <span id="whisper-label" style="font-size: 12px;">Whisper Locale</span>
                     </button>
                     <button type="submit" class="btn btn-primary" id="btn-send-prompt">
                       <span>Invia</span>

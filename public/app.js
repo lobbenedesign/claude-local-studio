@@ -1916,6 +1916,84 @@ window.toggleVoiceDictation = function() {
 };
 
 // ========================================================
+// 🎙️🧠 REAL LOCAL WHISPER DICTATION (whisper.cpp, non browser)
+// Alternativa reale alla SpeechRecognition sopra: registra audio col
+// MediaRecorder del browser e lo invia a /api/voice/transcribe, dove il
+// server esegue una trascrizione Whisper REALE in locale (whisper.cpp).
+// ========================================================
+let whisperMediaRecorder = null;
+let whisperAudioChunks = [];
+let isRecordingWhisper = false;
+
+window.toggleWhisperDictation = async function() {
+  const whisperTag = document.getElementById("whisper-status-tag");
+  const whisperIcon = document.getElementById("whisper-icon");
+  const promptInput = document.getElementById("agent-prompt-input");
+
+  if (isRecordingWhisper) {
+    if (whisperMediaRecorder && whisperMediaRecorder.state !== "inactive") {
+      whisperMediaRecorder.stop();
+    }
+    return;
+  }
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("Il tuo browser non supporta la registrazione audio (getUserMedia).");
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    whisperAudioChunks = [];
+    whisperMediaRecorder = new MediaRecorder(stream);
+
+    whisperMediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) whisperAudioChunks.push(e.data);
+    };
+
+    whisperMediaRecorder.onstart = () => {
+      isRecordingWhisper = true;
+      if (whisperTag) { whisperTag.style.display = "inline-flex"; whisperTag.textContent = "🔴 Registrazione Whisper..."; }
+      if (whisperIcon) whisperIcon.textContent = "🔴";
+    };
+
+    whisperMediaRecorder.onstop = async () => {
+      isRecordingWhisper = false;
+      stream.getTracks().forEach(t => t.stop());
+      if (whisperIcon) whisperIcon.textContent = "🧠";
+
+      const blob = new Blob(whisperAudioChunks, { type: whisperMediaRecorder.mimeType || "audio/webm" });
+      if (whisperTag) whisperTag.textContent = "⏳ Trascrizione Whisper reale in corso...";
+
+      try {
+        const res = await fetch("/api/voice/transcribe?lang=it", {
+          method: "POST",
+          headers: { "Content-Type": blob.type || "audio/webm" },
+          body: blob
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Errore trascrizione");
+
+        if (promptInput && data.text) {
+          promptInput.value = (promptInput.value ? promptInput.value.trim() + " " : "") + data.text.trim();
+          promptInput.focus();
+        }
+      } catch (e) {
+        console.error("Whisper transcription error:", e);
+        alert(`Trascrizione Whisper fallita: ${e.message}`);
+      } finally {
+        if (whisperTag) whisperTag.style.display = "none";
+      }
+    };
+
+    whisperMediaRecorder.start();
+  } catch (e) {
+    console.error("Could not start whisper recording:", e);
+    alert(`Impossibile accedere al microfono: ${e.message}`);
+  }
+};
+
+// ========================================================
 // 🧠 MEMGPT / LETTA 3-TIER HIERARCHICAL MEMORY UI
 // ========================================================
 window.openMemoryModal = async function() {

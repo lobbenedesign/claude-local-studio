@@ -14,3 +14,6 @@ package-lock.json
 .DS_Store
 Thumbs.db
 __pycache__/
+
+# Whisper GGML model weights (too large for git, download separately - see README)
+whisper-models/
