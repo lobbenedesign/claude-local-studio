@@ -73,12 +73,18 @@
 * **Safety guardrails, all real and tested**: every `read_file`/`write_file` path is resolved and must stay inside the active workspace — a `../` escape attempt is rejected and logged, verified live (`../evil.txt` correctly blocked while a legitimate in-workspace `evil.txt` was allowed, as expected). Writes are capped at 20 files per run. If the model fails to return valid JSON for 2 consecutive steps, the loop stops honestly instead of spinning. It never runs `git commit`/`git push` itself — that stays a separate, explicit action (`/commit`).
 * Verified end-to-end on a real fixture project (a failing `node` test expecting an `add(a,b)` function that didn't exist yet): the loop wrote the missing function to the real file, ran the real test command, saw a real `exit code 0`, and correctly declared itself done — independently re-run afterward to confirm the fix was genuinely on disk and the test genuinely passed.
 
-### 🚀 The 18 Specialized Slash Commands
+#### 11. 🖥️ Real Terminal Command Execution, always with explicit confirmation (new)
+* `/terminal` (or the "🖥️ Terminale" button) opens a real shell into the active workspace: `POST /api/workspace/terminal/exec` runs the given command for real via `Bun.spawn` and returns the real exit code, stdout and stderr. Every execution requires you to click "▶️ Esegui" yourself — there is no auto-run path anywhere in this feature.
+* After a normal chat response finishes streaming, the client scans the completed text for short ```bash/```sh/```shell fenced code blocks the model suggested and adds a real, clickable "▶️ Esegui" button next to each one (skipped for anything longer than 5 lines, to avoid offering to "run" a whole script blindly). Clicking it opens a native `confirm()` dialog showing the exact command before it reaches the terminal endpoint — closing the loop on "the agent can propose a command during the conversation, but only runs it with your confirmation," the way Cursor/Cline/Aider's terminal tool works.
+* Verified live in the browser: a real `echo ... && whoami` typed into the Terminal panel returned the real exit code and real output (including the actual macOS username); a synthetic assistant response containing a ` ```bash\nnpm install lodash\n``` ` block was correctly detected and rendered as a real, clickable suggestion.
+
+### 🚀 The 19 Specialized Slash Commands
 
 | Slash Command | Role & Specialization |
 | :--- | :--- |
 | **`/swarm <task>`** | Runs the autonomous 3-agent swarm pipeline (Ruflo) |
 | **`/agentloop <goal>`** | Autonomous multi-step loop: reads/writes real files and runs real tests without a prompt per step |
+| **`/terminal`** | Opens a real terminal in the workspace, always requires explicit confirmation before running |
 | **`/diagram <task>`** | Generates visual Mermaid.js architectural diagrams |
 | **`/prd <feature>`** | Creates a comprehensive Product Requirement Document |
 | **`/autofix`** | Autonomous test-and-repair loop on real stack traces |
@@ -159,6 +165,11 @@ Open **`http://localhost:3001`** in your browser.
 * Ogni passo è una singola chiamata LLM non-streaming (`POST /v1/messages` con `stream:false`) che deve restituire un oggetto JSON di azione; `write_file` scrive sempre il **contenuto completo e reale del file su disco** (verificato con `writeFileSync`, non una diff/patch che il modello deve applicare da solo), mostrato come vera diff unificata (`Diff.createTwoFilesPatch`) mentre accade. `run_test` esegue realmente il comando di test fornito (`Bun.spawn`, stesso pattern reale di sottoprocesso di `/autofix`) e restituisce il vero exit code e output al passo successivo.
 * **Guardrail di sicurezza, tutti reali e testati**: ogni percorso di `read_file`/`write_file` viene risolto e deve restare dentro il workspace attivo — un tentativo di fuga con `../` viene rifiutato e loggato, verificato dal vivo (`../evil.txt` correttamente bloccato, mentre un legittimo `evil.txt` dentro il workspace è stato permesso, come atteso). Le scritture sono limitate a 20 file per esecuzione. Se il modello non restituisce un JSON valido per 2 passi consecutivi, il loop si ferma onestamente invece di girare a vuoto. Non esegue mai `git commit`/`git push` da solo — resta un'azione separata ed esplicita (`/commit`).
 * Verificato end-to-end su un progetto fixture reale (un test `node` fallito che si aspettava una funzione `add(a,b)` non ancora esistente): il loop ha scritto realmente la funzione mancante nel file, eseguito il vero comando di test, visto un vero `exit code 0`, e dichiarato correttamente di aver finito — riverificato indipendentemente dopo per confermare che la correzione fosse realmente su disco e il test fosse realmente passato.
+
+#### 10. 🖥️ Esecuzione Reale di Comandi Terminale, sempre con conferma esplicita (nuovo)
+* `/terminal` (o il pulsante "🖥️ Terminale") apre una vera shell nel workspace attivo: `POST /api/workspace/terminal/exec` esegue realmente il comando via `Bun.spawn` e restituisce il vero exit code, stdout e stderr. Ogni esecuzione richiede che tu clicchi tu stesso "▶️ Esegui" — non esiste alcun percorso di esecuzione automatica in questa funzionalità.
+* Dopo che una normale risposta in chat finisce lo streaming, il client analizza il testo completato cercando brevi blocchi di codice ```bash/```sh/```shell suggeriti dal modello e aggiunge un vero pulsante cliccabile "▶️ Esegui" accanto a ciascuno (ignorati quelli più lunghi di 5 righe, per non offrire di "eseguire" alla cieca uno script intero). Cliccandolo si apre una finestra `confirm()` nativa che mostra il comando esatto prima che raggiunga l'endpoint del terminale — chiudendo il cerchio su "l'agente può proporre un comando durante la conversazione, ma lo esegue solo con la tua conferma", esattamente come funziona lo strumento terminale di Cursor/Cline/Aider.
+* Verificato dal vivo nel browser: un vero `echo ... && whoami` digitato nel pannello Terminale ha restituito il vero exit code e il vero output (incluso il reale username macOS); una risposta assistente sintetica contenente un blocco ` ```bash\nnpm install lodash\n``` ` è stata correttamente rilevata e mostrata come suggerimento reale cliccabile.
 
 ### 🛠️ Avvio Rapido
 ```bash

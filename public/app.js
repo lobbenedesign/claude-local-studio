@@ -150,6 +150,15 @@ const inputAgentLoopTask = document.getElementById("input-agentloop-task");
 const inputAgentLoopTestCmd = document.getElementById("input-agentloop-testcmd");
 const selectAgentLoopMaxSteps = document.getElementById("select-agentloop-maxsteps");
 
+// Real Terminal Execution Modal Elements
+const btnOpenTerminal = document.getElementById("btn-open-terminal");
+const terminalModal = document.getElementById("terminal-modal");
+const btnCloseTerminalModal = document.getElementById("btn-close-terminal-modal");
+const btnCloseTerminalModal2 = document.getElementById("btn-close-terminal-modal-2");
+const inputTerminalCmd = document.getElementById("input-terminal-cmd");
+const btnRunTerminalCmd = document.getElementById("btn-run-terminal-cmd");
+const terminalOutput = document.getElementById("terminal-output");
+
 // CMUX Process Multiplexer Elements
 const cmuxProcessList = document.getElementById("cmux-process-list");
 const cmuxCurrentStatusBadge = document.getElementById("cmux-current-status-badge");
@@ -561,6 +570,77 @@ async function runAutonomousLoop(task, testCommand, maxSteps = 8) {
   } finally {
     setAgentRunningState(false);
   }
+}
+
+// Open Real Terminal Modal
+window.openTerminalModal = function() {
+  if (terminalModal) terminalModal.style.display = "flex";
+};
+
+// Real Terminal Command Execution (always requires explicit user confirmation via this modal)
+async function runTerminalCommand(command) {
+  if (!command || !command.trim()) return;
+  if (terminalOutput) terminalOutput.textContent = `$ ${command}\n\n⏳ Esecuzione in corso...`;
+  if (btnRunTerminalCmd) btnRunTerminalCmd.disabled = true;
+
+  try {
+    const res = await fetch("/api/workspace/terminal/exec", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command, workspace: attachedWorkspacePath })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      terminalOutput.textContent = `$ ${command}\n\n❌ Errore: ${data.error || "sconosciuto"}`;
+      return;
+    }
+    const statusLine = data.exitCode === 0 ? `✅ exit code 0 (${data.durationMs}ms)` : `❌ exit code ${data.exitCode} (${data.durationMs}ms)`;
+    terminalOutput.textContent = `$ ${command}\n\n${statusLine}\n\n${data.stdout || ""}${data.stderr ? `\n--- stderr ---\n${data.stderr}` : ""}`;
+  } catch (err) {
+    if (terminalOutput) terminalOutput.textContent = `$ ${command}\n\n❌ Errore di connessione: ${err.message}`;
+  } finally {
+    if (btnRunTerminalCmd) btnRunTerminalCmd.disabled = false;
+  }
+}
+
+// Real, explicit "run this suggested command" affordance for agent chat output.
+// Scans a COMPLETED agent response for ```bash/```sh/```shell fenced blocks and
+// appends a real, clickable "▶️ Esegui" confirmation button per command found —
+// nothing here ever executes automatically, matching the same explicit-confirm
+// policy as the Terminal modal above.
+function offerToRunSuggestedCommands(fullResponseText, containerEntry) {
+  if (!fullResponseText || !containerEntry) return;
+  const fenceRegex = /```(?:bash|sh|shell)\n([\s\S]*?)```/g;
+  const commands = [];
+  let m;
+  while ((m = fenceRegex.exec(fullResponseText)) !== null) {
+    const cmd = m[1].trim();
+    if (cmd && cmd.split("\n").length <= 5) commands.push(cmd);
+  }
+  if (commands.length === 0) return;
+
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "margin-top: 10px; display: flex; flex-direction: column; gap: 6px;";
+  for (const cmd of commands) {
+    const row = document.createElement("div");
+    row.style.cssText = "display: flex; align-items: center; gap: 8px; background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.25); border-radius: 6px; padding: 6px 10px;";
+    const code = document.createElement("code");
+    code.textContent = cmd.length > 90 ? cmd.slice(0, 90) + "…" : cmd;
+    code.style.cssText = "font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;";
+    const btn = document.createElement("button");
+    btn.className = "btn btn-secondary btn-sm";
+    btn.textContent = "▶️ Esegui";
+    btn.onclick = () => {
+      if (!confirm(`Eseguire realmente questo comando nel workspace attivo?\n\n${cmd}`)) return;
+      window.openTerminalModal();
+      if (inputTerminalCmd) inputTerminalCmd.value = cmd;
+      runTerminalCommand(cmd);
+    };
+    row.appendChild(code);
+    row.appendChild(btn);
+    wrap.appendChild(row);
+  }
+  containerEntry.appendChild(wrap);
 }
 
 // Autonomous Auto-Debug & Test Loop Runner
@@ -1454,6 +1534,7 @@ async function runAgentPrompt(prompt) {
       }
     }
 
+    offerToRunSuggestedCommands(assistantEntry.textContent, assistantEntry);
     setAgentRunningState(false);
   } catch (err) {
     assistantEntry.textContent = `Errore di connessione: ${err.message}`;
@@ -1665,6 +1746,24 @@ function initEventListeners() {
   if (agentLoopModal) {
     agentLoopModal.addEventListener("click", (e) => {
       if (e.target === agentLoopModal) agentLoopModal.style.display = "none";
+    });
+  }
+
+  // Real Terminal Execution Modal Actions
+  if (btnOpenTerminal) btnOpenTerminal.addEventListener("click", window.openTerminalModal);
+  if (btnCloseTerminalModal) btnCloseTerminalModal.addEventListener("click", () => terminalModal.style.display = "none");
+  if (btnCloseTerminalModal2) btnCloseTerminalModal2.addEventListener("click", () => terminalModal.style.display = "none");
+  if (btnRunTerminalCmd) {
+    btnRunTerminalCmd.addEventListener("click", () => runTerminalCommand(inputTerminalCmd.value));
+  }
+  if (inputTerminalCmd) {
+    inputTerminalCmd.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") runTerminalCommand(inputTerminalCmd.value);
+    });
+  }
+  if (terminalModal) {
+    terminalModal.addEventListener("click", (e) => {
+      if (e.target === terminalModal) terminalModal.style.display = "none";
     });
   }
 

@@ -2676,6 +2676,44 @@ const server = Bun.serve({
         return new Response(JSON.stringify(report), { headers });
       }
 
+      // 6h-bis. Workspace: Real Terminal Command Execution (Cursor/Cline "run in terminal" style)
+      // ------------------------------------------------------
+      // Gap reale rispetto a Cursor/Cline/Aider: possono proporre ed eseguire
+      // comandi shell reali durante la conversazione. Qui l'esecuzione è
+      // sempre un'azione ESPLICITA dell'utente (il pannello "🖥️ Terminale",
+      // o cliccando "▶️ Esegui" su un comando suggerito dall'agente in chat)
+      // — mai automatica, a differenza del loop agentico che è limitato a
+      // read_file/write_file/run_test. Ogni comando gira realmente nella
+      // workspace via Bun.spawn, exit code e output reali restituiti.
+      if (url.pathname === "/api/workspace/terminal/exec" && req.method === "POST") {
+        try {
+          const body: any = await req.json();
+          const command: string = (body.command || "").trim();
+          const workspace = resolve(body.workspace || attachedWorkspacePath);
+          if (!command) {
+            return new Response(JSON.stringify({ error: "Comando obbligatorio" }), { status: 400, headers });
+          }
+
+          const startedAt = Date.now();
+          const proc = Bun.spawn(["bash", "-c", command], { cwd: workspace, stdout: "pipe", stderr: "pipe" });
+          const [outStr, errStr] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text()
+          ]);
+          const exitCode = await proc.exited;
+
+          return new Response(JSON.stringify({
+            command,
+            exitCode,
+            stdout: outStr.slice(0, 20000),
+            stderr: errStr.slice(0, 20000),
+            durationMs: Date.now() - startedAt
+          }), { headers });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+        }
+      }
+
       // ========================================================
       // 🔌 MCP (MODEL CONTEXT PROTOCOL) ROUTES
       // ========================================================
