@@ -49,23 +49,31 @@ Ordine pianificato (per rischio crescente):
        tree-sitter + regex fallback), `codebase-index.ts` (ricerca semantica
        @codebase), `context.ts` (analyzeProjectContext + resolveContextMentions).
        `src/stats.ts` aggiunto come effetto collaterale necessario (vedi sotto).
-7. [~] `src/providers/openai-compat.ts` estratto (handleOpenAICompatibleStream,
-       transformSSEToAnthropic, transformNDJSONToAnthropic, authErrorResponse).
-       **Deliberatamente non estratto**: `handleAnthropicProxy` stesso (~360
-       righe, la catena if di ~20 provider cloud + motori locali) e la
-       riscrittura a "registry dichiarativo" prevista in origine. Motivo:
-       legge/scrive ~20 variabili globali `let xxxApiKey` mutabili (vedi step 9)
-       — estrarlo bene richiede prima risolvere lo step 9, altrimenti il rischio
-       di rompere silenziosamente un provider su 20 è alto e difficile da
-       verificare uno per uno nel tempo disponibile. Lasciato intenzionalmente
-       per una sessione dedicata.
-8. [ ] `src/agent/` — run.ts, autodebug.ts, autonomous-loop.ts, ensemble.ts.
-       Dipendono dai provider (self-HTTP-loopback verso `handleAnthropicProxy`,
-       `fetch` verso `localhost:${PORT}/v1/messages`, non chiamata diretta di
-       funzione) — da fare dopo lo step 7 completo.
+7. [x] `src/providers/openai-compat.ts` (handleOpenAICompatibleStream,
+       transformSSEToAnthropic, transformNDJSONToAnthropic, authErrorResponse)
+       e `src/providers/dispatch.ts` (`handleAnthropicProxy`, i ~20 blocchi
+       provider cloud + motori locali). **Non riscritto** a "registry
+       dichiarativo": la catena di `if` è stata spostata così com'è, non
+       ristrutturata — cambiare la logica di 20 branch insieme al trasloco
+       avrebbe moltiplicato il rischio senza un beneficio funzionale reale.
+       Le ~20 chiavi API restano `let` globali in `server.ts` (non ancora
+       consolidate, vedi step 9): `dispatch.ts` le riceve come parametro
+       `ProviderApiKeys` invece di leggerle da variabili di modulo — evita la
+       rinomina di ~20 identificatori in tutto il file. `server.ts` costruisce
+       l'oggetto con il nuovo helper `currentProviderKeys()`.
+8. [~] `src/agent/ensemble.ts` estratto (confronto reale multi-provider in
+       parallelo, stesso pattern `ProviderApiKeys` di dispatch.ts). **Non
+       ancora estratti**: `agent/run` (~360 righe, pipeline principale con
+       swarm/ruflo/diagram/prd/review/... e streaming), `agent/autodebug`
+       (~170 righe), `agent/autonomous-loop` (~200 righe), `agent/stop`
+       (banale). Sono il pezzo più corposo e più usato di tutta l'app
+       (streaming via TransformStream, self-HTTP-loopback verso
+       `handleAnthropicProxy`, WebSocket publish) — lasciati per una sessione
+       dedicata con più margine per verificare ogni singolo modo (swarm,
+       ruflo, diagram, prd, review, refactor, test, doc, explain, bench,
+       docker, ci, env) uno per uno dopo l'estrazione.
 9. [ ] `src/config/app-config.ts` — le ~20 variabili globali `let xxxApiKey`
-       diventano uno store centralizzato. Prerequisito reale per completare lo
-       step 7 a basso rischio.
+       diventano uno store centralizzato invece di variabili sciolte.
 10. [ ] `src/routes/index.ts` + `server.ts` finale ridotto a poche righe.
 
 Trovato durante la mappatura: `currentAgentProcess` (variabile globale per
@@ -129,25 +137,45 @@ probabile codice morto, da verificare/rimuovere durante lo step 8.
   mancante finiva silenziosamente a fare diff sulla cartella di lavoro
   invece di un 400 pulito. Corretto controllando `body.filePath` prima del
   resolve, in `src/workspace/files.ts`.
+- Nell'estrarre `agent/ensemble.ts`, il tipo `EnsembleCandidate` usato in
+  `server.ts` (nella pipeline swarm multi-provider) non era più importato —
+  `bun build` non l'ha segnalato, ma un `tsc --noEmit` completo sì
+  (`Cannot find name 'EnsembleCandidate'`). Da qui in poi il type-check
+  completo è parte della verifica di ogni step, non solo `bun build`.
 
 ## Stato
 
 Fase 0 completa (test + CI + i due bug di Fase 0).
 
-Fase 1: **`server.ts` passato da 4.721 a 2.765 righe (-41%)**, 14 nuovi
+Fase 1: **`server.ts` passato da 4.721 a 2.305 righe (-51%)**, 16 nuovi
 moduli estratti in `src/` (whisper, mcp, background-process, catalogs,
 huggingface, git, security-scan, terminal, files, memory, repo-map,
-codebase-index, context, stats, providers/openai-compat). Ogni step
-verificato con build pulita, 4/4 smoke test verdi, e verifica manuale via
-curl/browser dell'endpoint toccato — inclusi test end-to-end reali (pull
-Hugging Face installato e poi rimosso da Ollama, chat proxy reale con
-streaming SSE, diff-apply che scrive davvero su disco con controllo dei
-confini del workspace).
+codebase-index, context, stats, providers/openai-compat, providers/dispatch,
+agent/ensemble). Ogni step verificato con build pulita + **type-check
+completo con `tsc --noEmit`** (ha trovato un import mancante reale che `bun
+build` da solo non segnalava — vedi sotto) + 4/4 smoke test + verifica
+manuale via curl/browser dell'endpoint toccato — inclusi test end-to-end
+reali (pull Hugging Face installato e poi rimosso da Ollama, chat proxy
+reale con streaming SSE, diff-apply che scrive davvero su disco, ensemble
+multi-provider che contatta realmente Cerebras/Mistral/Gemini).
 
-**Step 7 (providers) lasciato volutamente incompleto**: `handleAnthropicProxy`
-resta in `server.ts` perché dipende da ~20 variabili globali mutabili
-(`let xxxApiKey`) che vanno prima consolidate in un vero config store
-(step 9) per poter estrarre il dispatch senza rischio. Anche `src/agent/`
-(step 8) e `src/routes/` + `server.ts` finale (step 10) restano da fare,
-nello stesso ordine di dipendenza. Aggiornare le checkbox qui sopra ad ogni
-sessione futura.
+**Step 7 completato**: `dispatch.ts` (handleAnthropicProxy, ~20 provider) e
+`openai-compat.ts` estratti — senza riscrivere la catena di `if` a registry
+dichiarativo (trasloco puro, zero rischio aggiuntivo). Le ~20 chiavi API
+restano `let` globali in `server.ts` (step 9 non ancora fatto): `dispatch.ts`
+le riceve come parametro `ProviderApiKeys`, costruito da `server.ts` con il
+nuovo helper `currentProviderKeys()`, invece di rinominare ~20 identificatori
+in tutto il file.
+
+**Step 8 parziale**: solo `agent/ensemble.ts` estratto. `agent/run` (~360
+righe, pipeline principale con 13 modalità: swarm/ruflo/diagram/prd/review/
+refactor/test/doc/explain/bench/docker/ci/env), `autodebug` (~170 righe),
+`autonomous-loop` (~200 righe) e `stop` restano in `server.ts` — è la
+pipeline più corposa e più usata dell'app (streaming via TransformStream,
+self-HTTP-loopback verso `handleAnthropicProxy`, WebSocket publish),
+lasciata volutamente per una sessione con più margine per verificare ogni
+modalità singolarmente invece di rischiare un'estrazione affrettata sulla
+feature più critica.
+
+Step 9 (config store) e step 10 (routes finali + server.ts sottile) restano
+da fare. Aggiornare le checkbox qui sopra ad ogni sessione futura.

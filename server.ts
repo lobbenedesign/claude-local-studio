@@ -45,12 +45,8 @@ import { buildAstRepoMap } from "./src/workspace/repo-map";
 import { buildOrUpdateCodebaseIndex, semanticCodebaseSearch } from "./src/workspace/codebase-index";
 import { analyzeProjectContext, resolveContextMentions } from "./src/workspace/context";
 import { addTokensProcessed, getTokensProcessed } from "./src/stats";
-import {
-  authErrorResponse,
-  handleOpenAICompatibleStream,
-  transformSSEToAnthropic,
-  transformNDJSONToAnthropic
-} from "./src/providers/openai-compat";
+import { handleAnthropicProxy, type ProviderApiKeys } from "./src/providers/dispatch";
+import { getConfiguredEnsembleCandidates, callEnsembleCandidateNonStreaming, type EnsembleCandidate } from "./src/agent/ensemble";
 
 const PORT = Number(process.env.PORT) || 3001;
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
@@ -176,6 +172,18 @@ let telegramBotToken = initialConfig.telegramBotToken || "";
 let telegramAllowedChatId = initialConfig.telegramAllowedChatId || "";
 let telegramEnabled = initialConfig.telegramEnabled || false;
 let isTelegramPolling = false;
+
+// Snapshot of the current API keys for src/providers/dispatch.ts, which
+// receives them as a parameter instead of reading these `let` globals
+// directly (see ROADMAP.md, Fase 1, step 7 for why).
+function currentProviderKeys(): ProviderApiKeys {
+  return {
+    geminiApiKey, groqApiKey, openrouterApiKey, cerebrasApiKey, hfApiKey,
+    sambanovaApiKey, mistralApiKey, openaiApiKey, anthropicApiKey, deepseekApiKey,
+    xaiApiKey, togetherApiKey, fireworksApiKey, kimiApiKey, qwenApiKey, glmApiKey,
+    perplexityApiKey, customApiEndpoint, customApiKey
+  };
+}
 
 let currentAgentProcess: Subprocess | null = null;
 let sessionStartTime = Date.now();
@@ -364,107 +372,6 @@ async function pickFolderNative(): Promise<string> {
   }
 }
 
-// ========================================================
-// 🧪 REAL MULTI-PROVIDER ENSEMBLE (genuine side-by-side comparison)
-// ------------------------------------------------------
-// Unlike the "Ruflo Swarm" pipeline above (which is 3 sequential calls to
-// the SAME active model/provider with different role prompts, and does not
-// claim otherwise since the honesty audit), this calls 2+ DIFFERENT real
-// cloud providers/models in parallel, with the SAME prompt, and returns
-// each one's actual raw response untouched. There is no voting, no fake
-// "consensus" banner, and no merging of the outputs — the user reads and
-// compares the real answers themselves, the same way you'd open two
-// provider playgrounds side by side.
-// ========================================================
-
-interface EnsembleCandidate {
-  provider: string;
-  modelId: string;
-  displayName: string;
-  endpoint: string;
-  apiKey: string;
-  kind: "openai-compatible" | "gemini" | "anthropic";
-}
-
-function getConfiguredEnsembleCandidates(): EnsembleCandidate[] {
-  const candidates: EnsembleCandidate[] = [];
-
-  if (anthropicApiKey) {
-    candidates.push({ provider: "anthropic", modelId: "claude-3-5-haiku-20241022", displayName: "Anthropic Claude 3.5 Haiku", endpoint: "https://api.anthropic.com/v1/messages", apiKey: anthropicApiKey, kind: "anthropic" });
-  }
-  if (openaiApiKey) {
-    candidates.push({ provider: "openai", modelId: "gpt-4o-mini", displayName: "OpenAI GPT-4o Mini", endpoint: "https://api.openai.com/v1/chat/completions", apiKey: openaiApiKey, kind: "openai-compatible" });
-  }
-  if (groqApiKey) {
-    candidates.push({ provider: "groq", modelId: "llama-3.3-70b-versatile", displayName: "Groq Llama 3.3 70B", endpoint: "https://api.groq.com/openai/v1/chat/completions", apiKey: groqApiKey, kind: "openai-compatible" });
-  }
-  if (cerebrasApiKey) {
-    candidates.push({ provider: "cerebras", modelId: "llama-3.3-70b", displayName: "Cerebras Llama 3.3 70B", endpoint: "https://api.cerebras.ai/v1/chat/completions", apiKey: cerebrasApiKey, kind: "openai-compatible" });
-  }
-  if (mistralApiKey) {
-    candidates.push({ provider: "mistral", modelId: "mistral-small-latest", displayName: "Mistral Small Latest", endpoint: "https://api.mistral.ai/v1/chat/completions", apiKey: mistralApiKey, kind: "openai-compatible" });
-  }
-  if (geminiApiKey) {
-    candidates.push({ provider: "gemini", modelId: "gemini-2.0-flash", displayName: "Google Gemini 2.0 Flash", endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent", apiKey: geminiApiKey, kind: "gemini" });
-  }
-  if (openrouterApiKey) {
-    candidates.push({ provider: "openrouter", modelId: "meta-llama/llama-3.3-70b-instruct:free", displayName: "OpenRouter Llama 3.3 70B (free)", endpoint: "https://openrouter.ai/api/v1/chat/completions", apiKey: openrouterApiKey, kind: "openai-compatible" });
-  }
-
-  return candidates;
-}
-
-async function callEnsembleCandidateNonStreaming(candidate: EnsembleCandidate, systemPrompt: string, userPrompt: string): Promise<{ text: string; latencyMs: number }> {
-  const started = Date.now();
-
-  if (candidate.kind === "anthropic") {
-    const res = await fetch(candidate.endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": candidate.apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: candidate.modelId, max_tokens: 1024, system: systemPrompt, messages: [{ role: "user", content: userPrompt }] }),
-      signal: AbortSignal.timeout(45000)
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    const json: any = await res.json();
-    const text = (json.content || []).map((c: any) => c.text || "").join("");
-    return { text, latencyMs: Date.now() - started };
-  }
-
-  if (candidate.kind === "gemini") {
-    const res = await fetch(`${candidate.endpoint}?key=${candidate.apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
-      }),
-      signal: AbortSignal.timeout(45000)
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    const json: any = await res.json();
-    const text = json.candidates?.[0]?.content?.parts?.map((p: any) => p.text || "").join("") || "";
-    return { text, latencyMs: Date.now() - started };
-  }
-
-  // openai-compatible
-  const res = await fetch(candidate.endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${candidate.apiKey}` },
-    body: JSON.stringify({
-      model: candidate.modelId,
-      messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
-      temperature: 0.7,
-      max_tokens: 1024,
-      stream: false
-    }),
-    signal: AbortSignal.timeout(45000)
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const json: any = await res.json();
-  const text = json.choices?.[0]?.message?.content || "";
-  return { text, latencyMs: Date.now() - started };
-}
 
 const server = Bun.serve({
   port: PORT,
@@ -491,7 +398,7 @@ const server = Bun.serve({
 
     // Universal Anthropic Compatible Proxy
     if (url.pathname === "/v1/messages" || url.pathname === "/v1/complete") {
-      return handleAnthropicProxy(req);
+      return handleAnthropicProxy(req, activeModel, currentProviderKeys());
     }
 
     // REST API Routes
@@ -1426,7 +1333,7 @@ const server = Bun.serve({
             return new Response(JSON.stringify({ error: "prompt obbligatorio" }), { status: 400, headers });
           }
 
-          const candidates = getConfiguredEnsembleCandidates();
+          const candidates = getConfiguredEnsembleCandidates(currentProviderKeys());
           if (candidates.length < 2) {
             return new Response(JSON.stringify({
               error: `Servono almeno 2 provider cloud configurati per un confronto reale (attualmente configurati: ${candidates.length}). Aggiungi chiavi API in 'API Keys & Free Providers'.`,
@@ -1564,7 +1471,7 @@ Fornisci risposte complete, codice pulito e pronto all'uso, spiegazioni chiare e
 
           (async () => {
             try {
-              const multiProviderCandidates = isMultiProviderSwarm ? getConfiguredEnsembleCandidates() : [];
+              const multiProviderCandidates = isMultiProviderSwarm ? getConfiguredEnsembleCandidates(currentProviderKeys()) : [];
               const effectiveMultiProviderSwarm = isMultiProviderSwarm && multiProviderCandidates.length >= 2;
               if (isMultiProviderSwarm && !effectiveMultiProviderSwarm) {
                 await writer.write(encoder.encode(
@@ -1675,7 +1582,7 @@ Fornisci risposte complete, codice pulito e pronto all'uso, spiegazioni chiare e
                     body: JSON.stringify(payload)
                   });
 
-                  const proxyRes = await handleAnthropicProxy(proxyReq);
+                  const proxyRes = await handleAnthropicProxy(proxyReq, activeModel, currentProviderKeys());
                   if (!proxyRes.ok || !proxyRes.body) {
                     await writer.write(encoder.encode(`\n[Errore fase]: Impossibile completare ${phaseTitle}\n`));
                     return "";
@@ -1764,7 +1671,7 @@ Fornisci risposte complete, codice pulito e pronto all'uso, spiegazioni chiare e
                   body: JSON.stringify(anthropicPayload)
                 });
 
-                const proxyRes = await handleAnthropicProxy(proxyReq);
+                const proxyRes = await handleAnthropicProxy(proxyReq, activeModel, currentProviderKeys());
                 if (!proxyRes.ok || !proxyRes.body) {
                   const err = await proxyRes.text();
                   await writer.write(encoder.encode(`Errore (${proxyRes.status}): ${err}`));
@@ -1925,7 +1832,7 @@ Fornisci in modo chiaro e conciso:
                 body: JSON.stringify(debugPayload)
               });
 
-              const proxyRes = await handleAnthropicProxy(proxyReq);
+              const proxyRes = await handleAnthropicProxy(proxyReq, activeModel, currentProviderKeys());
               if (proxyRes.ok && proxyRes.body) {
                 const reader = proxyRes.body.getReader();
                 const decoder = new TextDecoder();
@@ -2058,7 +1965,7 @@ ${actionHistory.slice(-8).join("\n\n") || "(nessuna azione ancora, questo è il 
 
               let rawText = "";
               try {
-                const proxyRes = await handleAnthropicProxy(proxyReq);
+                const proxyRes = await handleAnthropicProxy(proxyReq, activeModel, currentProviderKeys());
                 const data: any = await proxyRes.json();
                 rawText = data?.content?.[0]?.text || "";
               } catch (e: any) {
@@ -2383,373 +2290,6 @@ ${actionHistory.slice(-8).join("\n\n") || "(nessuna azione ancora, questo è il 
     }
   }
 });
-
-/**
- * Universal Proxy Translation Engine
- */
-async function handleAnthropicProxy(req: Request) {
-  try {
-    const body: any = await req.json();
-    const modelToUse = activeModel;
-    const isStream = body.stream ?? true;
-
-    // 0. ROUTE TO ANTHROPIC CLAUDE API (Direct)
-    if (modelToUse.startsWith("anthropic/")) {
-      if (!anthropicApiKey) {
-        return authErrorResponse("Chiave Anthropic API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da console.anthropic.com)");
-      }
-      const realModelId = modelToUse.replace(/^anthropic\//i, "");
-      const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": anthropicApiKey,
-          "anthropic-version": "2023-06-01"
-        },
-        body: JSON.stringify({ ...body, model: realModelId })
-      });
-      return new Response(anthropicRes.body, {
-        status: anthropicRes.status,
-        headers: { "Content-Type": "text/event-stream", "Access-Control-Allow-Origin": "*" }
-      });
-    }
-
-    // 0b. ROUTE TO DEEPSEEK OFFICIAL API
-    if (modelToUse.startsWith("deepseek/")) {
-      if (!deepseekApiKey) {
-        return authErrorResponse("Chiave DeepSeek API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da platform.deepseek.com)");
-      }
-      const realModelId = modelToUse.replace(/^deepseek\//i, "");
-      return handleOpenAICompatibleStream("https://api.deepseek.com/v1/chat/completions", deepseekApiKey, realModelId, body);
-    }
-
-    // 0c. ROUTE TO XAI GROK API
-    if (modelToUse.startsWith("xai/") || modelToUse.startsWith("grok-")) {
-      if (!xaiApiKey) {
-        return authErrorResponse("Chiave xAI (Grok) API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da console.x.ai)");
-      }
-      const realModelId = modelToUse.replace(/^xai\//i, "");
-      return handleOpenAICompatibleStream("https://api.x.ai/v1/chat/completions", xaiApiKey, realModelId, body);
-    }
-
-    // 0d. ROUTE TO MOONSHOT KIMI (Kimi K3 / K1.5)
-    if (modelToUse.startsWith("kimi/") || modelToUse.startsWith("moonshot/")) {
-      if (!kimiApiKey) {
-        return authErrorResponse("Chiave Moonshot Kimi API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da platform.moonshot.cn)");
-      }
-      const realModelId = modelToUse.replace(/^(kimi|moonshot)\//i, "");
-      return handleOpenAICompatibleStream("https://api.moonshot.cn/v1/chat/completions", kimiApiKey, realModelId, body);
-    }
-
-    // 0e. ROUTE TO ALIBABA QWEN (DashScope)
-    if (modelToUse.startsWith("qwen-api/") || modelToUse.startsWith("dashscope/")) {
-      if (!qwenApiKey) {
-        return authErrorResponse("Chiave Alibaba Qwen / DashScope API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da dashscope.aliyun.com)");
-      }
-      const realModelId = modelToUse.replace(/^(qwen-api|dashscope)\//i, "");
-      return handleOpenAICompatibleStream("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", qwenApiKey, realModelId, body);
-    }
-
-    // 0f. ROUTE TO ZHIPU AI GLM (ChatGLM / GLM-4)
-    if (modelToUse.startsWith("glm/") || modelToUse.startsWith("zhipu/")) {
-      if (!glmApiKey) {
-        return authErrorResponse("Chiave Zhipu GLM API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da open.bigmodel.cn)");
-      }
-      const realModelId = modelToUse.replace(/^(glm|zhipu)\//i, "");
-      return handleOpenAICompatibleStream("https://open.bigmodel.cn/api/paas/v4/chat/completions", glmApiKey, realModelId, body);
-    }
-
-    // 0g. ROUTE TO PERPLEXITY AI (Sonar / Deep Research)
-    if (modelToUse.startsWith("perplexity/") || modelToUse.startsWith("sonar/")) {
-      if (!perplexityApiKey) {
-        return authErrorResponse("Chiave Perplexity API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da perplexity.ai/settings/api)");
-      }
-      const realModelId = modelToUse.replace(/^(perplexity|sonar)\//i, "");
-      return handleOpenAICompatibleStream("https://api.perplexity.ai/chat/completions", perplexityApiKey, realModelId, body);
-    }
-
-    // 0h. ROUTE TO FIREWORKS AI
-    if (modelToUse.startsWith("fireworks/")) {
-      if (!fireworksApiKey) {
-        return authErrorResponse("Chiave Fireworks AI API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da fireworks.ai)");
-      }
-      const realModelId = modelToUse.replace(/^fireworks\//i, "");
-      return handleOpenAICompatibleStream("https://api.fireworks.ai/inference/v1/chat/completions", fireworksApiKey, realModelId, body);
-    }
-
-    // 0i. ROUTE TO TOGETHER AI
-    if (modelToUse.startsWith("together/")) {
-      if (!togetherApiKey) {
-        return authErrorResponse("Chiave Together AI API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da together.ai)");
-      }
-      const realModelId = modelToUse.replace(/^together\//i, "");
-      return handleOpenAICompatibleStream("https://api.together.xyz/v1/chat/completions", togetherApiKey, realModelId, body);
-    }
-
-    // 0j. ROUTE TO LOCAL LM STUDIO SERVER (Port 1234)
-    if (modelToUse.startsWith("lmstudio/")) {
-      const realModelId = modelToUse.replace(/^lmstudio\//i, "");
-      return handleOpenAICompatibleStream("http://localhost:1234/v1/chat/completions", "lm-studio", realModelId, body);
-    }
-
-    // 0k. ROUTE TO LOCAL APPLE MLX / LLAMA.CPP SERVER (Port 8080)
-    if (modelToUse.startsWith("mlx/") || modelToUse.startsWith("llamacpp/")) {
-      const realModelId = modelToUse.replace(/^(mlx|llamacpp)\//i, "");
-      return handleOpenAICompatibleStream("http://localhost:8080/v1/chat/completions", "mlx", realModelId, body);
-    }
-
-    // 0l. ROUTE TO LOCAL VLLM SERVER (Port 8000)
-    if (modelToUse.startsWith("vllm/")) {
-      const realModelId = modelToUse.replace(/^vllm\//i, "");
-      return handleOpenAICompatibleStream("http://localhost:8000/v1/chat/completions", "vllm", realModelId, body);
-    }
-
-    // 0m. ROUTE TO CUSTOM ENDPOINT (Inception Labs / Private LLMs)
-    if (modelToUse.startsWith("custom/") && customApiEndpoint) {
-      const realModelId = modelToUse.replace(/^custom\//i, "");
-      return handleOpenAICompatibleStream(customApiEndpoint, customApiKey || "sk-dummy", realModelId, body);
-    }
-
-    // 0. ROUTE TO OPENAI / CHATGPT API
-    if (modelToUse.startsWith("openai/") || modelToUse.startsWith("gpt-") || modelToUse.startsWith("o1") || modelToUse.startsWith("o3")) {
-      if (!openaiApiKey) {
-        return authErrorResponse("Chiave OpenAI API (ChatGPT) mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila da platform.openai.com/api-keys)");
-      }
-      const realModelId = modelToUse.replace(/^openai\//i, "");
-      return handleOpenAICompatibleStream("https://api.openai.com/v1/chat/completions", openaiApiKey, realModelId, body);
-    }
-
-    // 1. ROUTE TO CEREBRAS CLOUD (~1800 tok/s)
-    if (modelToUse.startsWith("cerebras/")) {
-      if (!cerebrasApiKey) {
-        return authErrorResponse("Chiave Cerebras API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila gratis da cloud.cerebras.ai)");
-      }
-      const realModelId = modelToUse.replace("cerebras/", "");
-      return handleOpenAICompatibleStream("https://api.cerebras.ai/v1/chat/completions", cerebrasApiKey, realModelId, body);
-    }
-
-    // 2. ROUTE TO SAMBANOVA CLOUD (671B MoE)
-    if (modelToUse.startsWith("sambanova/")) {
-      if (!sambanovaApiKey) {
-        return authErrorResponse("Chiave SambaNova API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila gratis da cloud.sambanova.ai)");
-      }
-      const realModelId = modelToUse.replace("sambanova/", "");
-      return handleOpenAICompatibleStream("https://api.sambanova.ai/v1/chat/completions", sambanovaApiKey, realModelId, body);
-    }
-
-    // 3. ROUTE TO MISTRAL AI (Codestral)
-    if (modelToUse.startsWith("mistral/")) {
-      if (!mistralApiKey) {
-        return authErrorResponse("Chiave Mistral API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila gratis da console.mistral.ai)");
-      }
-      const realModelId = modelToUse.replace("mistral/", "");
-      return handleOpenAICompatibleStream("https://api.mistral.ai/v1/chat/completions", mistralApiKey, realModelId, body);
-    }
-
-    // 3b. ROUTE TO HUGGING FACE INFERENCE PROVIDERS ROUTER
-    if (modelToUse.startsWith("hf/")) {
-      if (!hfApiKey) {
-        return authErrorResponse("Chiave Hugging Face mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila gratis da huggingface.co/settings/tokens)");
-      }
-      const realModelId = modelToUse.replace("hf/", "");
-      return handleOpenAICompatibleStream("https://router.huggingface.co/v1/chat/completions", hfApiKey, realModelId, body);
-    }
-
-    // 4. ROUTE TO GROQ CLOUD (Free Tier 70B)
-    if (modelToUse.startsWith("groq/")) {
-      if (!groqApiKey) {
-        return authErrorResponse("Chiave Groq API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila gratis da console.groq.com)");
-      }
-      const realModelId = modelToUse.replace("groq/", "");
-      return handleOpenAICompatibleStream("https://api.groq.com/openai/v1/chat/completions", groqApiKey, realModelId, body);
-    }
-
-    // 5. ROUTE TO OPENROUTER (:free Models)
-    if (modelToUse.startsWith("openrouter/")) {
-      if (!openrouterApiKey) {
-        return authErrorResponse("Chiave OpenRouter API mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila gratis da openrouter.ai/keys)");
-      }
-      const realModelId = modelToUse.replace("openrouter/", "");
-      return handleOpenAICompatibleStream("https://openrouter.ai/api/v1/chat/completions", openrouterApiKey, realModelId, body);
-    }
-
-    // 6. ROUTE TO GOOGLE GEMINI API
-    if (modelToUse.toLowerCase().startsWith("gemini")) {
-      if (!geminiApiKey) {
-        return authErrorResponse("Chiave Gemini API non configurata! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila gratis da aistudio.google.com)");
-      }
-
-      const contents: any[] = [];
-      let systemInstruction: any = undefined;
-
-      if (body.system) {
-        const sysText = Array.isArray(body.system)
-          ? body.system.map((s: any) => s.text || "").join("\n")
-          : body.system;
-        systemInstruction = { parts: [{ text: sysText }] };
-      }
-
-      if (body.messages) {
-        for (const msg of body.messages) {
-          let text = "";
-          if (typeof msg.content === "string") {
-            text = msg.content;
-          } else if (Array.isArray(msg.content)) {
-            text = msg.content
-              .map((c: any) => (c.type === "text" ? c.text : JSON.stringify(c)))
-              .join("\n");
-          }
-          contents.push({
-            role: msg.role === "assistant" ? "model" : "user",
-            parts: [{ text }]
-          });
-        }
-      }
-
-      const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:streamGenerateContent?key=${geminiApiKey}&alt=sse`;
-
-      const geminiRes = await fetch(geminiEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents,
-          systemInstruction,
-          generationConfig: {
-            temperature: body.temperature || 0.7,
-            maxOutputTokens: body.max_tokens || 8192
-          }
-        })
-      });
-
-      if (!geminiRes.ok) {
-        const errText = await geminiRes.text();
-        return new Response(JSON.stringify({ error: errText }), {
-          status: geminiRes.status,
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-        });
-      }
-
-      return transformSSEToAnthropic(geminiRes, (json) => {
-        return json.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      }, modelToUse);
-    }
-
-    // 6b. ROUTE TO LOCAL ENGINES (LM Studio, Apple MLX, vLLM, EXO Cluster, KTransformers MoE, AirLLM)
-    if (modelToUse.startsWith("lmstudio/")) {
-      const realModelId = modelToUse.replace("lmstudio/", "");
-      return handleOpenAICompatibleStream("http://localhost:1234/v1/chat/completions", "lm-studio", realModelId, body);
-    }
-    if (modelToUse.startsWith("mlx/")) {
-      const realModelId = modelToUse.replace("mlx/", "");
-      return handleOpenAICompatibleStream("http://localhost:8080/v1/chat/completions", "mlx", realModelId, body);
-    }
-    if (modelToUse.startsWith("vllm/")) {
-      const realModelId = modelToUse.replace("vllm/", "");
-      return handleOpenAICompatibleStream("http://localhost:8000/v1/chat/completions", "vllm", realModelId, body);
-    }
-    if (modelToUse.startsWith("exo/")) {
-      const realModelId = modelToUse.replace("exo/", "");
-      return handleOpenAICompatibleStream("http://localhost:52415/v1/chat/completions", "exo", realModelId, body);
-    }
-    if (modelToUse.startsWith("ktransformers/")) {
-      const realModelId = modelToUse.replace("ktransformers/", "");
-      return handleOpenAICompatibleStream("http://localhost:10002/v1/chat/completions", "ktransformers", realModelId, body);
-    }
-    if (modelToUse.startsWith("airllm/")) {
-      const realModelId = modelToUse.replace("airllm/", "");
-      return handleOpenAICompatibleStream("http://localhost:5000/v1/chat/completions", "airllm", realModelId, body);
-    }
-    if (modelToUse.startsWith("llamafile/")) {
-      const realModelId = modelToUse.replace("llamafile/", "");
-      return handleOpenAICompatibleStream("http://localhost:8080/v1/chat/completions", "llamafile", realModelId, body);
-    }
-    if (modelToUse.startsWith("freetoken/")) {
-      const realModelId = modelToUse.replace("freetoken/", "");
-      return handleOpenAICompatibleStream("http://localhost:1919/v1/chat/completions", "freetoken-local", realModelId, body);
-    }
-
-    // 7. ROUTE TO OLLAMA LOCAL API
-    const ollamaMessages: any[] = [];
-
-    if (body.system) {
-      const systemContent = Array.isArray(body.system)
-        ? body.system.map((s: any) => s.text || "").join("\n")
-        : body.system;
-      ollamaMessages.push({ role: "system", content: systemContent });
-    }
-
-    if (body.messages) {
-      for (const msg of body.messages) {
-        let content = "";
-        if (typeof msg.content === "string") {
-          content = msg.content;
-        } else if (Array.isArray(msg.content)) {
-          content = msg.content
-            .map((c: any) => (c.type === "text" ? c.text : JSON.stringify(c)))
-            .join("\n");
-        }
-        ollamaMessages.push({
-          role: msg.role === "assistant" ? "assistant" : "user",
-          content
-        });
-      }
-    }
-
-    const ollamaPayload: any = {
-      model: modelToUse,
-      messages: ollamaMessages,
-      stream: isStream,
-      options: { temperature: body.temperature || 0.7 }
-    };
-
-    if (body.tools && Array.isArray(body.tools)) {
-      ollamaPayload.tools = body.tools.map((t: any) => ({
-        type: "function",
-        function: {
-          name: t.name,
-          description: t.description || "",
-          parameters: t.input_schema || {}
-        }
-      }));
-    }
-
-    const ollamaRes = await fetch(`${OLLAMA_HOST}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(ollamaPayload)
-    });
-
-    if (!isStream) {
-      const data: any = await ollamaRes.json();
-      const text = data.message?.content || "";
-      addTokensProcessed(Math.round(text.length / 3.5));
-
-      const anthropicResponse = {
-        id: `msg_${Date.now()}`,
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text }],
-        model: modelToUse,
-        stop_reason: "end_turn",
-        usage: {
-          input_tokens: Math.round(JSON.stringify(ollamaMessages).length / 4),
-          output_tokens: Math.round(text.length / 4)
-        }
-      };
-
-      return new Response(JSON.stringify(anthropicResponse), {
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-      });
-    }
-
-    return transformNDJSONToAnthropic(ollamaRes, modelToUse);
-  } catch (e: any) {
-    return new Response(JSON.stringify({ error: e.message }), {
-      status: 500,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-    });
-  }
-}
 
 console.log(`\n======================================================`);
 console.log(`🚀 CUSTOM CLAUDE CODER running on http://localhost:${PORT}`);
