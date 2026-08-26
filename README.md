@@ -67,11 +67,18 @@
 * `/api/workspace/file/diff-preview` computes a genuine unified diff (Myers algorithm, via the `diff` npm package) between a file's on-disk content and LLM-proposed new content — preview-only, nothing is written. `/api/workspace/file/diff-apply` writes it for real, with an optional optimistic-concurrency check (`expectedOldContent`) so a file that changed on disk since the preview isn't silently clobbered.
 * `/api/agent/ensemble` sends the same prompt to 2+ **different** configured cloud providers/models in parallel (Anthropic, OpenAI, Groq, Cerebras, Mistral, Gemini, OpenRouter) and returns each one's raw, unmodified response. Unlike the 3-role pipeline above, this is a real cross-provider comparison — no voting, no merged "consensus" answer.
 
-### 🚀 The 17 Specialized Slash Commands
+#### 10. 🤖 Autonomous Multi-Step Agentic Loop (new — a genuine gap vs Cursor Agent / Cline)
+* `/agentloop` (or the "🤖 Loop Agentico" button) is a **real** multi-step autonomous loop: give it a goal and it repeatedly decides and executes one real action per step — `read_file`, `write_file`, `run_test`, or `done` — without a prompt per step, exactly the capability Cursor Agent and Cline have that this project lacked before.
+* Each step is a single non-streaming LLM call (`POST /v1/messages` with `stream:false`) that must return one JSON action object; `write_file` always writes the **complete real file content to disk** (verified with `writeFileSync`, not a diff/patch the model has to apply itself), shown to you as a real unified diff (`Diff.createTwoFilesPatch`) as it happens. `run_test` really executes the given test command (`Bun.spawn`, same real subprocess pattern as `/autofix`) and feeds the real exit code and output back into the next step.
+* **Safety guardrails, all real and tested**: every `read_file`/`write_file` path is resolved and must stay inside the active workspace — a `../` escape attempt is rejected and logged, verified live (`../evil.txt` correctly blocked while a legitimate in-workspace `evil.txt` was allowed, as expected). Writes are capped at 20 files per run. If the model fails to return valid JSON for 2 consecutive steps, the loop stops honestly instead of spinning. It never runs `git commit`/`git push` itself — that stays a separate, explicit action (`/commit`).
+* Verified end-to-end on a real fixture project (a failing `node` test expecting an `add(a,b)` function that didn't exist yet): the loop wrote the missing function to the real file, ran the real test command, saw a real `exit code 0`, and correctly declared itself done — independently re-run afterward to confirm the fix was genuinely on disk and the test genuinely passed.
+
+### 🚀 The 18 Specialized Slash Commands
 
 | Slash Command | Role & Specialization |
 | :--- | :--- |
 | **`/swarm <task>`** | Runs the autonomous 3-agent swarm pipeline (Ruflo) |
+| **`/agentloop <goal>`** | Autonomous multi-step loop: reads/writes real files and runs real tests without a prompt per step |
 | **`/diagram <task>`** | Generates visual Mermaid.js architectural diagrams |
 | **`/prd <feature>`** | Creates a comprehensive Product Requirement Document |
 | **`/autofix`** | Autonomous test-and-repair loop on real stack traces |
@@ -146,6 +153,12 @@ Open **`http://localhost:3001`** in your browser.
 #### 8. 🔀 Diff Unificata Reale (Preview & Apply) & Confronto Multi-Provider Reale
 * `/api/workspace/file/diff-preview` calcola una vera diff unificata (algoritmo di Myers, tramite il pacchetto npm `diff`) tra il contenuto su disco di un file e il nuovo contenuto proposto dall'LLM — solo anteprima, nessuna scrittura. `/api/workspace/file/diff-apply` scrive davvero su disco, con un controllo opzionale di concorrenza ottimistica (`expectedOldContent`) per evitare di sovrascrivere in silenzio un file cambiato nel frattempo.
 * `/api/agent/ensemble` invia lo stesso prompt a 2+ provider/modelli cloud **diversi** configurati in parallelo (Anthropic, OpenAI, Groq, Cerebras, Mistral, Gemini, OpenRouter) e restituisce ogni risposta grezza e non modificata. A differenza della pipeline a 3 ruoli sopra, questo è un vero confronto cross-provider: nessun voto, nessuna risposta "consenso" fusa.
+
+#### 9. 🤖 Loop Agentico Autonomo Multi-Step (nuovo — gap reale rispetto a Cursor Agent / Cline)
+* `/agentloop` (o il pulsante "🤖 Loop Agentico") è un **vero** loop autonomo multi-passo: gli dai un obiettivo e decide ed esegue realmente, passo dopo passo, una singola azione per volta — `read_file`, `write_file`, `run_test` o `done` — senza bisogno di un prompt ad ogni passo, esattamente la capacità che Cursor Agent e Cline hanno e che questo progetto non aveva prima.
+* Ogni passo è una singola chiamata LLM non-streaming (`POST /v1/messages` con `stream:false`) che deve restituire un oggetto JSON di azione; `write_file` scrive sempre il **contenuto completo e reale del file su disco** (verificato con `writeFileSync`, non una diff/patch che il modello deve applicare da solo), mostrato come vera diff unificata (`Diff.createTwoFilesPatch`) mentre accade. `run_test` esegue realmente il comando di test fornito (`Bun.spawn`, stesso pattern reale di sottoprocesso di `/autofix`) e restituisce il vero exit code e output al passo successivo.
+* **Guardrail di sicurezza, tutti reali e testati**: ogni percorso di `read_file`/`write_file` viene risolto e deve restare dentro il workspace attivo — un tentativo di fuga con `../` viene rifiutato e loggato, verificato dal vivo (`../evil.txt` correttamente bloccato, mentre un legittimo `evil.txt` dentro il workspace è stato permesso, come atteso). Le scritture sono limitate a 20 file per esecuzione. Se il modello non restituisce un JSON valido per 2 passi consecutivi, il loop si ferma onestamente invece di girare a vuoto. Non esegue mai `git commit`/`git push` da solo — resta un'azione separata ed esplicita (`/commit`).
+* Verificato end-to-end su un progetto fixture reale (un test `node` fallito che si aspettava una funzione `add(a,b)` non ancora esistente): il loop ha scritto realmente la funzione mancante nel file, eseguito il vero comando di test, visto un vero `exit code 0`, e dichiarato correttamente di aver finito — riverificato indipendentemente dopo per confermare che la correzione fosse realmente su disco e il test fosse realmente passato.
 
 ### 🛠️ Avvio Rapido
 ```bash

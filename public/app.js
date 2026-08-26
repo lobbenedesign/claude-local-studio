@@ -140,6 +140,16 @@ const btnRunAutodebug = document.getElementById("btn-run-autodebug");
 const inputAutodebugCmd = document.getElementById("input-autodebug-cmd");
 const selectAutodebugIterations = document.getElementById("select-autodebug-iterations");
 
+// Autonomous Agentic Loop Modal Elements
+const btnOpenAgentLoop = document.getElementById("btn-open-agentloop");
+const agentLoopModal = document.getElementById("agentloop-modal");
+const btnCloseAgentLoopModal = document.getElementById("btn-close-agentloop-modal");
+const btnCancelAgentLoop = document.getElementById("btn-cancel-agentloop");
+const btnRunAgentLoop = document.getElementById("btn-run-agentloop");
+const inputAgentLoopTask = document.getElementById("input-agentloop-task");
+const inputAgentLoopTestCmd = document.getElementById("input-agentloop-testcmd");
+const selectAgentLoopMaxSteps = document.getElementById("select-agentloop-maxsteps");
+
 // CMUX Process Multiplexer Elements
 const cmuxProcessList = document.getElementById("cmux-process-list");
 const cmuxCurrentStatusBadge = document.getElementById("cmux-current-status-badge");
@@ -495,6 +505,63 @@ window.openAutoDebugModal = function() {
 window.setAutoDebugCmd = function(cmd) {
   if (inputAutodebugCmd) inputAutodebugCmd.value = cmd;
 };
+
+// Open Autonomous Agentic Loop Modal
+window.openAgentLoopModal = function() {
+  if (agentLoopModal) agentLoopModal.style.display = "flex";
+};
+
+// Autonomous Multi-Step Agentic Loop Runner (Cursor Agent / Cline style)
+async function runAutonomousLoop(task, testCommand, maxSteps = 8) {
+  if (currentAgentRunning) {
+    alert("Un task o ciclo è già in esecuzione!");
+    return;
+  }
+  if (!task || !task.trim()) {
+    alert("Descrivi un obiettivo per il loop agentico.");
+    return;
+  }
+
+  setAgentRunningState(true);
+  if (agentLoopModal) agentLoopModal.style.display = "none";
+  switchTab("tab-workspace");
+
+  appendAgentOutput(`\n======================================================\n🤖 AVVIO LOOP AGENTICO AUTONOMO (Cursor Agent / Cline style)\nObiettivo: ${task}\nComando di test: ${testCommand || "(nessuno)"}\nPassi massimi: ${maxSteps}\nWorkspace: ${attachedWorkspacePath}\n======================================================\n`, false);
+
+  try {
+    const res = await fetch("/api/agent/autonomous-loop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task,
+        testCommand,
+        maxSteps,
+        workspace: attachedWorkspacePath
+      })
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      appendAgentOutput(`\n❌ Errore avvio loop agentico: ${errText}\n`, true);
+      setAgentRunningState(false);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      if (chunk) appendAgentOutput(chunk, false);
+    }
+  } catch (err) {
+    appendAgentOutput(`\n❌ Errore durante l'esecuzione del loop agentico: ${err.message}\n`, true);
+  } finally {
+    setAgentRunningState(false);
+  }
+}
 
 // Autonomous Auto-Debug & Test Loop Runner
 async function runAutoDebugTestLoop(command, maxIterations = 3) {
@@ -1580,6 +1647,24 @@ function initEventListeners() {
   if (autodebugModal) {
     autodebugModal.addEventListener("click", (e) => {
       if (e.target === autodebugModal) autodebugModal.style.display = "none";
+    });
+  }
+
+  // Autonomous Agentic Loop Modal Actions
+  if (btnOpenAgentLoop) btnOpenAgentLoop.addEventListener("click", window.openAgentLoopModal);
+  if (btnCloseAgentLoopModal) btnCloseAgentLoopModal.addEventListener("click", () => agentLoopModal.style.display = "none");
+  if (btnCancelAgentLoop) btnCancelAgentLoop.addEventListener("click", () => agentLoopModal.style.display = "none");
+  if (btnRunAgentLoop) {
+    btnRunAgentLoop.addEventListener("click", () => {
+      const task = inputAgentLoopTask.value.trim();
+      const testCommand = inputAgentLoopTestCmd.value.trim();
+      const maxSteps = parseInt(selectAgentLoopMaxSteps.value, 10) || 8;
+      runAutonomousLoop(task, testCommand, maxSteps);
+    });
+  }
+  if (agentLoopModal) {
+    agentLoopModal.addEventListener("click", (e) => {
+      if (e.target === agentLoopModal) agentLoopModal.style.display = "none";
     });
   }
 
