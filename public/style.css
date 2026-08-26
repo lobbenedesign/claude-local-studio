@@ -957,6 +957,25 @@ body {
   color: #e2e8f0;
 }
 
+/* CodeMirror 6 editor mount (Explorer tab FIM ghost-text editor) */
+.cm-editor-mount {
+  height: 100%;
+}
+.cm-editor-mount .cm-editor {
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+.cm-editor-mount .cm-editor.cm-focused {
+  outline: none;
+}
+.cm-fim-ghost {
+  color: var(--text-muted);
+  font-style: italic;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
 /* Stats Page */
 .stats-grid {
   display: grid;

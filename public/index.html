@@ -511,6 +511,7 @@
                 <span class="code-file-meta" id="explorer-current-meta"></span>
               </div>
               <div id="explorer-file-actions" style="display: none; gap: 6px; margin-left: auto; flex-wrap: wrap;">
+                <button class="btn btn-secondary btn-sm" id="btn-explorer-save" title="Salva le modifiche su disco">💾 Salva</button>
                 <button class="btn btn-secondary btn-sm" onclick="window.explorerGenerateTest ? window.explorerGenerateTest() : null" title="Genera suite di test per questo file">🧪 Test</button>
                 <button class="btn btn-secondary btn-sm" onclick="window.explorerGenerateDoc ? window.explorerGenerateDoc() : null" title="Genera documentazione e commenti per questo file">📝 Doc</button>
                 <button class="btn btn-secondary btn-sm" onclick="window.explorerRefactor ? window.explorerRefactor() : null" title="Ottimizza e pulisci questo file">⚡ Refactor</button>
@@ -519,8 +520,8 @@
                 <button class="btn btn-secondary btn-sm" id="btn-explorer-open-finder" title="Mostra nel Finder o Explorer">📂 Mostra</button>
               </div>
             </div>
-            <div class="code-viewer-body">
-              <pre><code id="explorer-code-content">// Clicca su un file nell'albero per visualizzarne il contenuto qui...</code></pre>
+            <div class="code-viewer-body" id="explorer-code-viewer-body">
+              <div id="explorer-editor-mount" class="cm-editor-mount"></div>
             </div>
           </div>
         </div>
@@ -1178,6 +1179,7 @@
     </div>
   </div>
 
+  <script type="module" src="fim_editor.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

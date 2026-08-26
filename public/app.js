@@ -115,12 +115,19 @@ const explorerFolderName = document.getElementById("explorer-folder-name");
 const explorerTreeContainer = document.getElementById("explorer-tree-container");
 const explorerCurrentFilename = document.getElementById("explorer-current-filename");
 const explorerCurrentMeta = document.getElementById("explorer-current-meta");
-const explorerCodeContent = document.getElementById("explorer-code-content");
+const explorerEditorMount = document.getElementById("explorer-editor-mount");
 const btnExplorerBrowse = document.getElementById("btn-explorer-browse");
 const explorerFileActions = document.getElementById("explorer-file-actions");
 const btnExplorerOpenCursor = document.getElementById("btn-explorer-open-cursor");
 const btnExplorerOpenVscode = document.getElementById("btn-explorer-open-vscode");
 const btnExplorerOpenFinder = document.getElementById("btn-explorer-open-finder");
+const btnExplorerSave = document.getElementById("btn-explorer-save");
+let fimEditorInstance = null;
+// Separate from fimEditorInstance: nav-tab clicks fire switchTab() twice per
+// click (both the inline onclick and initTabs()'s addEventListener call it),
+// so a guard on fimEditorInstance alone would still race and mount two
+// CodeMirror instances before the first async createFimEditor() resolves.
+let fimEditorMountStarted = false;
 
 // Modal Elements
 const fileModal = document.getElementById("file-modal");
@@ -248,6 +255,15 @@ window.switchTab = function(tabName) {
 
   if (tabName === "explorer") {
     attachWorkspace(attachedWorkspacePath);
+    if (!fimEditorMountStarted && window.createFimEditor && explorerEditorMount) {
+      fimEditorMountStarted = true;
+      window.createFimEditor(explorerEditorMount, { getWorkspace: () => attachedWorkspacePath })
+        .then(instance => { fimEditorInstance = instance; })
+        .catch(err => {
+          fimEditorMountStarted = false;
+          console.error("Impossibile inizializzare l'editor FIM:", err);
+        });
+    }
   } else if (tabName === "models" || tabName === "settings") {
     fetchModels();
   } else if (tabName === "stats") {
@@ -1000,13 +1016,38 @@ async function viewFileInExplorer(filePath) {
     if (data.content !== undefined) {
       explorerCurrentFilename.textContent = data.name;
       explorerCurrentMeta.textContent = `(${data.path})`;
-      explorerCodeContent.textContent = data.content;
+      if (fimEditorInstance) {
+        fimEditorInstance.setContent(data.name, data.content);
+      }
       if (explorerFileActions) explorerFileActions.style.display = "flex";
     }
   } catch (err) {
-    explorerCodeContent.textContent = `Errore nel caricamento: ${err.message}`;
+    if (fimEditorInstance) fimEditorInstance.setContent("error.txt", `Errore nel caricamento: ${err.message}`);
   }
 }
+
+// Save the editor's current content back to disk, reusing the diff-apply
+// endpoint (already used by the agent's own "Apply" flow) rather than
+// introducing a separate write endpoint.
+window.explorerSaveFile = async function() {
+  if (!fimEditorInstance || !activeExplorerFilePath) return;
+  try {
+    const newContent = fimEditorInstance.getContent();
+    const res = await fetch("/api/workspace/file/diff-apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: activeExplorerFilePath, newContent, workspace: attachedWorkspacePath })
+    });
+    const data = await res.json();
+    if (data.success) {
+      explorerCurrentMeta.textContent = `(${activeExplorerFilePath}) — salvato ${new Date().toLocaleTimeString()}`;
+    } else {
+      alert("Salvataggio fallito: " + (data.error || "errore sconosciuto"));
+    }
+  } catch (err) {
+    alert("Salvataggio fallito: " + err.message);
+  }
+};
 
 // Fetch All Models & Persistent API Keys State
 async function fetchModels() {
@@ -1690,6 +1731,7 @@ function initEventListeners() {
   if (chipRulesStatus) chipRulesStatus.addEventListener("click", openRulesModal);
 
   // Explorer File Actions
+  if (btnExplorerSave) btnExplorerSave.addEventListener("click", () => window.explorerSaveFile());
   if (btnExplorerOpenCursor) btnExplorerOpenCursor.addEventListener("click", () => openInEditor("cursor", activeExplorerFilePath));
   if (btnExplorerOpenVscode) btnExplorerOpenVscode.addEventListener("click", () => openInEditor("code", activeExplorerFilePath));
   if (btnExplorerOpenFinder) btnExplorerOpenFinder.addEventListener("click", () => openInEditor("finder", activeExplorerFilePath));

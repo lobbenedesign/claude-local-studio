@@ -509,32 +509,40 @@ const GROQ_FREE_MODELS = [
   }
 ];
 
+// Static fallback only — Cerebras's actual free-tier lineup is fetched live
+// from /v1/models in the /api/models handler below whenever a Cerebras key
+// is configured, because this list goes stale: llama-3.3-70b/llama3.1-8b
+// (previously hardcoded here) started returning HTTP 404 "model_not_found"
+// once Cerebras rotated their free model lineup — confirmed by querying
+// https://api.cerebras.ai/v1/models directly with a real account key, which
+// returned only gpt-oss-120b and gemma-4-31b. This list is just what's shown
+// before a key is entered / if the live probe fails.
 const CEREBRAS_FREE_MODELS = [
   {
-    name: "cerebras/llama-3.3-70b",
-    modelId: "llama-3.3-70b",
-    displayName: "Llama 3.3 70B (Cerebras)",
-    author: "Meta & Cerebras AI",
+    name: "cerebras/gpt-oss-120b",
+    modelId: "gpt-oss-120b",
+    displayName: "GPT-OSS 120B (Cerebras)",
+    author: "OpenAI OSS & Cerebras AI",
     provider: "cerebras",
     size: "Cloud API",
     context: "128k Context",
-    speed: "~1.800 tok/s (Record Mondiale)",
+    speed: "Cerebras Wafer-Scale Engine",
     cost: "Free Developer Tier",
-    desc: "Il modello da 70B più veloce del pianeta su wafer-scale engine Cerebras CS-3.",
-    tag: "⚡ 1800+ tok/s"
+    desc: "Modello open-weight da 120B servito su hardware wafer-scale Cerebras.",
+    tag: "⚡ Cerebras"
   },
   {
-    name: "cerebras/llama3.1-8b",
-    modelId: "llama3.1-8b",
-    displayName: "Llama 3.1 8B (Cerebras)",
-    author: "Meta & Cerebras AI",
+    name: "cerebras/gemma-4-31b",
+    modelId: "gemma-4-31b",
+    displayName: "Gemma 4 31B (Cerebras)",
+    author: "Google & Cerebras AI",
     provider: "cerebras",
     size: "Cloud API",
     context: "128k Context",
-    speed: "~2.200 tok/s",
+    speed: "Cerebras Wafer-Scale Engine",
     cost: "Free Developer Tier",
-    desc: "Inferenza istantanea in tempo reale per autocompletamento e task rapidi.",
-    tag: "⚡ 2200+ tok/s"
+    desc: "Gemma 4 31B servito su hardware wafer-scale Cerebras.",
+    tag: "⚡ Cerebras"
   }
 ];
 
@@ -2147,6 +2155,66 @@ const server = Bun.serve({
             }
           } catch {}
 
+          // 1h2. Probe Cerebras's real model catalog when a key is present.
+          // The free-tier lineup changes over time (this is what caused the
+          // model_not_found bug: llama3.1-8b/llama-3.3-70b were hardcoded and
+          // Cerebras had since rotated to gpt-oss-120b/gemma-4-31b) — a live
+          // probe means the dropdown always reflects what the account can
+          // actually use, not a snapshot from whenever this file was written.
+          let cerebrasModelsLive: typeof CEREBRAS_FREE_MODELS | null = null;
+          if (cerebrasApiKey) {
+            try {
+              const cbRes = await fetch("https://api.cerebras.ai/v1/models", {
+                headers: {
+                  Authorization: `Bearer ${cerebrasApiKey}`,
+                  // Cerebras's edge blocks requests with no browser-like
+                  // User-Agent (HTTP 403 "error code: 1010", a Cloudflare
+                  // bot-challenge response, not an auth error) — confirmed
+                  // while diagnosing the model_not_found bug above.
+                  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+                },
+                signal: AbortSignal.timeout(4000)
+              }).catch(() => null);
+              if (cbRes && cbRes.ok) {
+                const cbData: any = await cbRes.json();
+                if (Array.isArray(cbData.data) && cbData.data.length > 0) {
+                  cerebrasModelsLive = cbData.data.map((m: any) => ({
+                    name: `cerebras/${m.id}`,
+                    modelId: m.id,
+                    displayName: `${m.id} (Cerebras)`,
+                    author: "Cerebras",
+                    provider: "cerebras",
+                    size: "Cloud API",
+                    context: "—",
+                    speed: "Cerebras Wafer-Scale Engine",
+                    cost: "Free Developer Tier",
+                    desc: "Modello attualmente disponibile sul tuo account Cerebras (rilevato in tempo reale).",
+                    tag: "Live"
+                  }));
+                }
+              }
+            } catch {}
+          }
+
+          // 1i. Probe FreeToken Edge MoE Engine (1919)
+          try {
+            const ftRes = await fetch("http://localhost:1919/v1/models", { signal: AbortSignal.timeout(600) }).catch(() => null);
+            if (ftRes && ftRes.ok) {
+              const ftData: any = await ftRes.json();
+              if (ftData.data && Array.isArray(ftData.data)) {
+                for (const m of ftData.data) {
+                  localModels.push({
+                    name: `freetoken/${m.id}`,
+                    displayName: `FreeToken Edge MoE: ${m.id}`,
+                    size: 0,
+                    details: { parameter_size: "MoE (up to 753B)", quantization_level: "MXFP4/NVFP4/FP8" },
+                    engine: "FreeToken"
+                  });
+                }
+              }
+            }
+          } catch {}
+
           return new Response(
             JSON.stringify({
               ollamaOnline,
@@ -2196,7 +2264,7 @@ const server = Bun.serve({
               featuredLocalModels: FEATURED_LOCAL_MODELS,
               openaiModels: OPENAI_MODELS,
               groqModels: GROQ_FREE_MODELS,
-              cerebrasModels: CEREBRAS_FREE_MODELS,
+              cerebrasModels: cerebrasModelsLive ?? CEREBRAS_FREE_MODELS,
               sambanovaModels: SAMBANOVA_FREE_MODELS,
               mistralModels: MISTRAL_FREE_MODELS,
               openrouterModels: OPENROUTER_FREE_MODELS,
@@ -2615,26 +2683,69 @@ const server = Bun.serve({
           const prefix = body.prefix || "";
           const suffix = body.suffix || "";
           const language = body.language || "typescript";
+          const workspace: string | undefined = body.workspace;
 
-          // Format FIM prompt
-          const fimPrompt = `<PRE> ${prefix} <SUF> ${suffix} <MID>`;
+          // Multi-file context reuse (llama.vim-style ring buffer, without
+          // building a new subsystem): reuse the codebase index this project
+          // already persists per-workspace with mtime-based invalidation
+          // (buildOrUpdateCodebaseIndex / .claude/codebase-index.json), and
+          // pull in the few chunks most relevant to what's being completed.
+          let contextSnippet = "";
+          if (workspace) {
+            try {
+              await buildOrUpdateCodebaseIndex(workspace);
+              const query = (prefix.slice(-200) || suffix.slice(0, 200)).trim();
+              if (query) {
+                const hits = await semanticCodebaseSearch(workspace, query, 3);
+                contextSnippet = hits.map(h => `// --- ${h.file}:${h.startLine} ---\n${h.text}`).join("\n");
+              }
+            } catch {}
+          }
+
+          // Format FIM prompt, now optionally prefixed with cross-file context.
+          const fimPrompt = `<PRE> ${contextSnippet ? contextSnippet + "\n" : ""}${prefix} <SUF> ${suffix} <MID>`;
 
           let completion = "";
+          let engineUsed = "Ollama";
           try {
-            const ollamaRes = await fetch(`${OLLAMA_HOST}/api/generate`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: activeModel.includes(":") ? activeModel : "qwen2.5-coder:1.5b",
-                prompt: fimPrompt,
-                stream: false,
-                options: { stop: ["<EOT>", "\n\n", "<MID>"], temperature: 0.2 }
-              })
-            }).catch(() => null);
+            if (activeModel.startsWith("freetoken/")) {
+              // Route through FreeToken (or, by the same pattern, any other
+              // locally-registered OpenAI-compatible engine) instead of being
+              // hardcoded to Ollama — activeModel already drives every other
+              // endpoint in this file, FIM just wasn't wired to it before.
+              const realModelId = activeModel.replace("freetoken/", "");
+              const ftRes = await fetch("http://localhost:1919/v1/completions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  model: realModelId,
+                  prompt: fimPrompt,
+                  max_tokens: 40,
+                  temperature: 0.2,
+                  stop: ["<EOT>", "\n\n", "<MID>"]
+                })
+              }).catch(() => null);
+              if (ftRes && ftRes.ok) {
+                const data: any = await ftRes.json();
+                completion = data?.choices?.[0]?.text || "";
+                engineUsed = "FreeToken";
+              }
+            } else {
+              const ollamaRes = await fetch(`${OLLAMA_HOST}/api/generate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  model: activeModel.includes(":") ? activeModel : "qwen2.5-coder:1.5b",
+                  prompt: fimPrompt,
+                  stream: false,
+                  options: { stop: ["<EOT>", "\n\n", "<MID>"], temperature: 0.2 }
+                })
+              }).catch(() => null);
 
-            if (ollamaRes && ollamaRes.ok) {
-              const data: any = await ollamaRes.json();
-              completion = data.response || "";
+              if (ollamaRes && ollamaRes.ok) {
+                const data: any = await ollamaRes.json();
+                completion = data.response || "";
+              }
             }
           } catch {}
 
@@ -2642,7 +2753,7 @@ const server = Bun.serve({
             completion = `// FIM autocompletion for ${language}`;
           }
 
-          return new Response(JSON.stringify({ success: true, completion, language }), { headers });
+          return new Response(JSON.stringify({ success: true, completion, language, engineUsed }), { headers });
         } catch (e: any) {
           return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
         }
@@ -4113,6 +4224,10 @@ async function handleAnthropicProxy(req: Request) {
     if (modelToUse.startsWith("llamafile/")) {
       const realModelId = modelToUse.replace("llamafile/", "");
       return handleOpenAICompatibleStream("http://localhost:8080/v1/chat/completions", "llamafile", realModelId, body);
+    }
+    if (modelToUse.startsWith("freetoken/")) {
+      const realModelId = modelToUse.replace("freetoken/", "");
+      return handleOpenAICompatibleStream("http://localhost:1919/v1/chat/completions", "freetoken-local", realModelId, body);
     }
 
     // 7. ROUTE TO OLLAMA LOCAL API
