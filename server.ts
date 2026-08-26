@@ -5,8 +5,26 @@ import { homedir, tmpdir } from "os";
 import * as ts from "typescript";
 import * as Diff from "diff";
 import TSParser from "web-tree-sitter";
+import { transcribeAudioWithWhisper } from "./src/integrations/whisper";
+import { loadMcpConfig, saveMcpConfig } from "./src/integrations/mcp";
+import { backgroundProcesses, launchProcess, nextProcessId } from "./src/processes/background-process";
+import {
+  FEATURED_LOCAL_MODELS,
+  GROQ_FREE_MODELS,
+  CEREBRAS_FREE_MODELS,
+  HF_ROUTER_MODELS,
+  SAMBANOVA_FREE_MODELS,
+  MISTRAL_FREE_MODELS,
+  OPENROUTER_FREE_MODELS,
+  GEMINI_MODELS,
+  OPENAI_MODELS
+} from "./src/models/catalogs";
+import { searchHfModels, listHfGgufFiles } from "./src/models/huggingface";
+import { getGitStatus } from "./src/workspace/git";
+import { scanSecuritySecrets } from "./src/workspace/security-scan";
+import { execTerminalCommand } from "./src/workspace/terminal";
 
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
 
 // Persistent Configuration Path (Saved locally in workspace or user home)
@@ -238,7 +256,7 @@ async function startTelegramPolling(server: any) {
             await sendTelegramMessage(chatId, `⏳ Elaborazione con ${activeModel}...`);
 
             try {
-              const response = await fetch(`http://localhost:3001/v1/messages`, {
+              const response = await fetch(`http://localhost:${PORT}/v1/messages`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -263,107 +281,6 @@ async function startTelegramPolling(server: any) {
   isTelegramPolling = false;
 }
 
-// Background Process Multiplexer (cmux / tmux style)
-interface BackgroundProcess {
-  id: string;
-  name: string;
-  command: string;
-  cwd: string;
-  status: "running" | "stopped" | "error";
-  pid?: number;
-  logs: string[];
-  startTime?: number;
-  proc?: any;
-}
-
-const backgroundProcesses = new Map<string, BackgroundProcess>();
-let processCounter = 1;
-
-function launchProcess(id: string, name: string, command: string, cwd: string, server: any): BackgroundProcess {
-  const processInfo: BackgroundProcess = {
-    id,
-    name,
-    command,
-    cwd,
-    status: "running",
-    logs: [`[${new Date().toLocaleTimeString()}] Avvio processo: ${command}`],
-    startTime: Date.now()
-  };
-
-  try {
-    const isWindows = process.platform === "win32";
-    const shellCmd = isWindows ? ["cmd.exe", "/c", command] : ["/bin/sh", "-c", command];
-
-    const proc = Bun.spawn(shellCmd, {
-      cwd,
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, FORCE_COLOR: "1" }
-    });
-
-    processInfo.proc = proc;
-    processInfo.pid = proc.pid;
-
-    // Read stdout
-    (async () => {
-      if (!proc.stdout) return;
-      const reader = proc.stdout.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() || "";
-        for (const line of lines) {
-          if (line) {
-            processInfo.logs.push(line);
-            if (processInfo.logs.length > 500) processInfo.logs.shift();
-            server.publish("claude-studio", JSON.stringify({ type: "process_log", id, log: line }));
-          }
-        }
-      }
-    })();
-
-    // Read stderr
-    (async () => {
-      if (!proc.stderr) return;
-      const reader = proc.stderr.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() || "";
-        for (const line of lines) {
-          if (line) {
-            processInfo.logs.push(`[stderr] ${line}`);
-            if (processInfo.logs.length > 500) processInfo.logs.shift();
-            server.publish("claude-studio", JSON.stringify({ type: "process_log", id, log: `[stderr] ${line}` }));
-          }
-        }
-      }
-    })();
-
-    // Handle exit
-    proc.exited.then((code: number) => {
-      processInfo.status = code === 0 ? "stopped" : "error";
-      processInfo.logs.push(`[${new Date().toLocaleTimeString()}] Processo terminato con codice: ${code}`);
-      server.publish("claude-studio", JSON.stringify({ type: "process_exit", id, exitCode: code, status: processInfo.status }));
-    });
-
-  } catch (err: any) {
-    processInfo.status = "error";
-    processInfo.logs.push(`[Errore avvio]: ${err.message}`);
-  }
-
-  backgroundProcesses.set(id, processInfo);
-  return processInfo;
-}
-
 // Cross-Platform Claude CLI Detection
 const possibleCliPaths = [
   join(import.meta.dir, "..", "claude-code-main", "claude-code-main", "dist", "cli.js"),
@@ -371,424 +288,6 @@ const possibleCliPaths = [
   join(import.meta.dir, "claude-code-main", "dist", "cli.js")
 ];
 let CLAUDE_CLI_PATH = possibleCliPaths.find(p => existsSync(p)) || possibleCliPaths[0];
-
-// ==========================================
-// MODEL CATALOG DEFINITIONS
-// ==========================================
-
-const FEATURED_LOCAL_MODELS = [
-  {
-    name: "qwen2.5-coder:7b",
-    displayName: "Qwen 2.5 Coder 7B",
-    author: "Alibaba Cloud",
-    provider: "ollama",
-    size: "4.7 GB",
-    minRam: "8 GB",
-    context: "32k Context",
-    speed: "45 tok/s",
-    cost: "€ 0.00 (Illimitato)",
-    desc: "Top model di coding locale. Eccellente in Python, TypeScript, refactoring e tool use.",
-    tag: "Consigliato Locale"
-  },
-  {
-    name: "qwen2.5-coder:1.5b",
-    displayName: "Qwen 2.5 Coder 1.5B",
-    author: "Alibaba Cloud",
-    provider: "ollama",
-    size: "1.0 GB",
-    minRam: "4 GB",
-    context: "32k Context",
-    speed: "95 tok/s",
-    cost: "€ 0.00 (Illimitato)",
-    desc: "Leggerissimo e velocissimo. Ideale per computer portatili e script rapidi.",
-    tag: "Ultra-Fast"
-  },
-  {
-    name: "deepseek-coder-v2:16b",
-    displayName: "DeepSeek Coder V2 16B",
-    author: "DeepSeek AI",
-    provider: "ollama",
-    size: "8.9 GB",
-    minRam: "16 GB",
-    context: "64k Context",
-    speed: "30 tok/s",
-    cost: "€ 0.00 (Illimitato)",
-    desc: "Architettura Mixture-of-Experts con forte capacità logica e comprensione del codice.",
-    tag: "High Reasoning"
-  },
-  {
-    name: "llama3.2:3b",
-    displayName: "Llama 3.2 3B",
-    author: "Meta",
-    provider: "ollama",
-    size: "2.0 GB",
-    minRam: "6 GB",
-    context: "128k Context",
-    speed: "65 tok/s",
-    cost: "€ 0.00 (Illimitato)",
-    desc: "Modello compatto di Meta con finestra di contesto nativa fino a 128k token.",
-    tag: "Large Context"
-  },
-  {
-    name: "deepseek-r1:7b",
-    displayName: "DeepSeek R1 Distill 7B",
-    author: "DeepSeek AI",
-    provider: "ollama",
-    size: "4.7 GB",
-    minRam: "8 GB",
-    context: "64k Context",
-    speed: "40 tok/s",
-    cost: "€ 0.00 (Illimitato)",
-    desc: "Il celebre modello di ragionamento matematico e logico DeepSeek R1 distillato su architettura 7B.",
-    tag: "🧠 R1 Reasoning"
-  },
-  {
-    name: "deepseek-r1:14b",
-    displayName: "DeepSeek R1 Distill 14B",
-    author: "DeepSeek AI",
-    provider: "ollama",
-    size: "9.0 GB",
-    minRam: "16 GB",
-    context: "64k Context",
-    speed: "25 tok/s",
-    cost: "€ 0.00 (Illimitato)",
-    desc: "Equilibrio perfetto tra potenza di ragionamento da 70B e consumo di RAM contenuto.",
-    tag: "🧠 R1 14B"
-  },
-  {
-    name: "deepseek-r1:32b",
-    displayName: "DeepSeek R1 Distill 32B",
-    author: "DeepSeek AI",
-    provider: "ollama",
-    size: "19.0 GB",
-    minRam: "24 GB",
-    context: "64k Context",
-    speed: "15 tok/s",
-    cost: "€ 0.00 (Illimitato)",
-    desc: "Ragionamento di livello GPT-4o eseguibile localmente su macchine con 24GB+ RAM.",
-    tag: "🧠 R1 32B"
-  }
-];
-
-const GROQ_FREE_MODELS = [
-  {
-    name: "groq/llama-3.3-70b-versatile",
-    modelId: "llama-3.3-70b-versatile",
-    displayName: "Llama 3.3 70B Versatile",
-    author: "Meta & Groq Cloud",
-    provider: "groq",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "~350 tok/s (Groq LPU)",
-    cost: "Free Tier (14.4k req/giorno)",
-    desc: "Modello da 70 miliardi di parametri con velocità fulminea su chip Groq.",
-    tag: "Groq 70B Free"
-  },
-  {
-    name: "groq/deepseek-r1-distill-llama-70b",
-    modelId: "deepseek-r1-distill-llama-70b",
-    displayName: "DeepSeek R1 Distill 70B",
-    author: "DeepSeek & Groq",
-    provider: "groq",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "~300 tok/s",
-    cost: "Free Tier",
-    desc: "Il motore di ragionamento di DeepSeek R1 distillato su architettura 70B.",
-    tag: "DeepSeek R1 Free"
-  },
-  {
-    name: "groq/qwen-2.5-coder-32b",
-    modelId: "qwen-2.5-coder-32b",
-    displayName: "Qwen 2.5 Coder 32B",
-    author: "Alibaba & Groq",
-    provider: "groq",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "~400 tok/s",
-    cost: "Free Tier",
-    desc: "Modello specializzato in codice da 32B con velocità ultra-rapida su Groq.",
-    tag: "Qwen 32B Free"
-  }
-];
-
-// Static fallback only — Cerebras's actual free-tier lineup is fetched live
-// from /v1/models in the /api/models handler below whenever a Cerebras key
-// is configured, because this list goes stale: llama-3.3-70b/llama3.1-8b
-// (previously hardcoded here) started returning HTTP 404 "model_not_found"
-// once Cerebras rotated their free model lineup — confirmed by querying
-// https://api.cerebras.ai/v1/models directly with a real account key, which
-// returned only gpt-oss-120b and gemma-4-31b. This list is just what's shown
-// before a key is entered / if the live probe fails.
-const CEREBRAS_FREE_MODELS = [
-  {
-    name: "cerebras/gpt-oss-120b",
-    modelId: "gpt-oss-120b",
-    displayName: "GPT-OSS 120B (Cerebras)",
-    author: "OpenAI OSS & Cerebras AI",
-    provider: "cerebras",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "Cerebras Wafer-Scale Engine",
-    cost: "Free Developer Tier",
-    desc: "Modello open-weight da 120B servito su hardware wafer-scale Cerebras.",
-    tag: "⚡ Cerebras"
-  },
-  {
-    name: "cerebras/gemma-4-31b",
-    modelId: "gemma-4-31b",
-    displayName: "Gemma 4 31B (Cerebras)",
-    author: "Google & Cerebras AI",
-    provider: "cerebras",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "Cerebras Wafer-Scale Engine",
-    cost: "Free Developer Tier",
-    desc: "Gemma 4 31B servito su hardware wafer-scale Cerebras.",
-    tag: "⚡ Cerebras"
-  }
-];
-
-// Catalogo minimo: il router HF dà accesso a migliaia di modelli tramite
-// provider partner (Together, Novita, Fireworks, ecc.) — questi sono solo
-// alcuni punti di partenza noti, non un elenco esaustivo. Il formato
-// "repo:provider" (o ":auto" per selezione automatica) è quello richiesto
-// da https://router.huggingface.co/v1/chat/completions.
-const HF_ROUTER_MODELS = [
-  {
-    name: "hf/deepseek-ai/DeepSeek-V3.1:auto",
-    modelId: "deepseek-ai/DeepSeek-V3.1:auto",
-    displayName: "DeepSeek V3.1 (HF Router, auto)",
-    author: "DeepSeek AI",
-    provider: "huggingface",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "Varia per provider",
-    cost: "Free/Pay-per-use (credito HF incluso)",
-    desc: "Instradato automaticamente al miglior provider disponibile su Hugging Face Inference Providers.",
-    tag: "🤗 HF Router"
-  },
-  {
-    name: "hf/openai/gpt-oss-120b:auto",
-    modelId: "openai/gpt-oss-120b:auto",
-    displayName: "GPT-OSS 120B (HF Router, auto)",
-    author: "OpenAI OSS",
-    provider: "huggingface",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "Varia per provider",
-    cost: "Free/Pay-per-use (credito HF incluso)",
-    desc: "Modello open-weight OpenAI instradato tramite Hugging Face Inference Providers.",
-    tag: "🤗 HF Router"
-  },
-  {
-    name: "hf/Qwen/Qwen2.5-Coder-32B-Instruct:auto",
-    modelId: "Qwen/Qwen2.5-Coder-32B-Instruct:auto",
-    displayName: "Qwen 2.5 Coder 32B (HF Router, auto)",
-    author: "Alibaba Cloud",
-    provider: "huggingface",
-    size: "Cloud API",
-    context: "32k Context",
-    speed: "Varia per provider",
-    cost: "Free/Pay-per-use (credito HF incluso)",
-    desc: "Modello di coding instradato tramite Hugging Face Inference Providers.",
-    tag: "🤗 HF Router"
-  }
-];
-
-const SAMBANOVA_FREE_MODELS = [
-  {
-    name: "sambanova/DeepSeek-R1",
-    modelId: "DeepSeek-R1",
-    displayName: "DeepSeek R1 (671B Full MoE)",
-    author: "DeepSeek & SambaNova",
-    provider: "sambanova",
-    size: "Cloud API",
-    context: "64k Context",
-    speed: "~160 tok/s (SN40L RDU)",
-    cost: "Free Tier (SambaNova Cloud)",
-    desc: "Il mastodontico modello originale da 671 miliardi di parametri su hardware SambaNova Reconfigurable Dataflow.",
-    tag: "671B MoE Free"
-  },
-  {
-    name: "sambanova/Meta-Llama-3.3-70B-Instruct",
-    modelId: "Meta-Llama-3.3-70B-Instruct",
-    displayName: "Llama 3.3 70B Instruct",
-    author: "Meta & SambaNova",
-    provider: "sambanova",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "~200 tok/s",
-    cost: "Free Tier",
-    desc: "Llama 3.3 70B accelerato per compiti di coding e reasoning.",
-    tag: "70B Free"
-  },
-  {
-    name: "sambanova/Qwen2.5-Coder-32B-Instruct",
-    modelId: "Qwen2.5-Coder-32B-Instruct",
-    displayName: "Qwen 2.5 Coder 32B",
-    author: "Alibaba & SambaNova",
-    provider: "sambanova",
-    size: "Cloud API",
-    context: "32k Context",
-    speed: "~180 tok/s",
-    cost: "Free Tier",
-    desc: "Modello Qwen di riferimento per lo sviluppo software.",
-    tag: "Coder 32B"
-  }
-];
-
-const MISTRAL_FREE_MODELS = [
-  {
-    name: "mistral/codestral-latest",
-    modelId: "codestral-latest",
-    displayName: "Codestral Latest (22B)",
-    author: "Mistral AI",
-    provider: "mistral",
-    size: "Cloud API",
-    context: "256k Context",
-    speed: "~80 tok/s",
-    cost: "Free Dev Tier (La Plateforme)",
-    desc: "Il celebre modello specializzato di Mistral AI, addestrato su oltre 80 linguaggi con 256k token di contesto.",
-    tag: "Codestral 256k"
-  },
-  {
-    name: "mistral/mistral-small-latest",
-    modelId: "mistral-small-latest",
-    displayName: "Mistral Small Latest",
-    author: "Mistral AI",
-    provider: "mistral",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "~110 tok/s",
-    cost: "Free Dev Tier",
-    desc: "Modello compatto di ultima generazione per refactoring e coding rapido.",
-    tag: "Mistral Small"
-  }
-];
-
-const OPENROUTER_FREE_MODELS = [
-  {
-    name: "openrouter/deepseek/deepseek-r1:free",
-    modelId: "deepseek/deepseek-r1:free",
-    displayName: "DeepSeek R1 (671B Full)",
-    author: "DeepSeek & OpenRouter",
-    provider: "openrouter",
-    size: "Cloud API",
-    context: "64k Context",
-    speed: "~40 tok/s",
-    cost: "100% Free (:free tag)",
-    desc: "DeepSeek R1 completo da 671 miliardi di parametri con catena di pensiero libera.",
-    tag: "671B MoE Free"
-  },
-  {
-    name: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-    modelId: "meta-llama/llama-3.3-70b-instruct:free",
-    displayName: "Llama 3.3 70B Instruct",
-    author: "Meta & OpenRouter",
-    provider: "openrouter",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "~50 tok/s",
-    cost: "100% Free (:free tag)",
-    desc: "Modello open-weight di punta di Meta con supporto avanzato per coding.",
-    tag: "Meta 70B Free"
-  },
-  {
-    name: "openrouter/qwen/qwen-2.5-coder-32b-instruct:free",
-    modelId: "qwen/qwen-2.5-coder-32b-instruct:free",
-    displayName: "Qwen 2.5 Coder 32B Instruct",
-    author: "Alibaba & OpenRouter",
-    provider: "openrouter",
-    size: "Cloud API",
-    context: "32k Context",
-    speed: "~45 tok/s",
-    cost: "100% Free (:free tag)",
-    desc: "Modello specializzato con supporto esteso a decine di linguaggi di programmazione.",
-    tag: "Coder 32B Free"
-  }
-];
-
-const GEMINI_MODELS = [
-  {
-    name: "gemini-2.5-pro",
-    displayName: "Gemini 2.5 Pro",
-    author: "Google DeepMind",
-    provider: "gemini",
-    size: "Cloud API",
-    context: "2.000.000 Token (2M)",
-    speed: "High Reasoning",
-    cost: "API Gratuita AI Studio",
-    desc: "Flagship Google con contesto da 2 Milioni di token. Ideale per caricare intere codebase in memoria.",
-    tag: "Google Flagship"
-  },
-  {
-    name: "gemini-2.5-flash",
-    displayName: "Gemini 2.5 Flash",
-    author: "Google DeepMind",
-    provider: "gemini",
-    size: "Cloud API",
-    context: "1.000.000 Token (1M)",
-    speed: "Real-Time (~120 tok/s)",
-    cost: "API Gratuita AI Studio",
-    desc: "Velocissimo con 1M di contesto. Perfetto per refactoring e generazioni veloci.",
-    tag: "Ultra-Fast Flash"
-  },
-  {
-    name: "gemini-2.0-flash",
-    displayName: "Gemini 2.0 Flash",
-    author: "Google DeepMind",
-    provider: "gemini",
-    size: "Cloud API",
-    context: "1.000.000 Token (1M)",
-    speed: "Real-Time",
-    cost: "API Gratuita AI Studio",
-    desc: "Bassa latenza e forte supporto per esecuzione comandi agente.",
-    tag: "Next-Gen Flash"
-  }
-];
-
-const OPENAI_MODELS = [
-  {
-    name: "openai/gpt-4o",
-    modelId: "gpt-4o",
-    displayName: "GPT-4o (Omni)",
-    author: "OpenAI",
-    provider: "openai",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "Real-Time (~90 tok/s)",
-    cost: "OpenAI API",
-    desc: "Il modello ammiraglio multimodale di OpenAI con massime capacità di coding e reasoning.",
-    tag: "Flagship GPT-4o"
-  },
-  {
-    name: "openai/gpt-4o-mini",
-    modelId: "gpt-4o-mini",
-    displayName: "GPT-4o Mini",
-    author: "OpenAI",
-    provider: "openai",
-    size: "Cloud API",
-    context: "128k Context",
-    speed: "Ultra-Fast (~140 tok/s)",
-    cost: "OpenAI API Economica",
-    desc: "Veloce ed economico, ideale per modifiche rapide e generazione di test.",
-    tag: "Fast & Lightweight"
-  },
-  {
-    name: "openai/o3-mini",
-    modelId: "o3-mini",
-    displayName: "OpenAI o3-mini (Reasoning)",
-    author: "OpenAI",
-    provider: "openai",
-    size: "Cloud API",
-    context: "200k Context",
-    speed: "~80 tok/s",
-    cost: "OpenAI API",
-    desc: "Modello specializzato nel ragionamento logico, matematico e programmazione complessa.",
-    tag: "High Reasoning"
-  }
-];
 
 // Recursive file tree reader
 function getDirectoryTree(dirPath: string, maxDepth = 3, currentDepth = 0): any[] {
@@ -1084,247 +583,6 @@ async function saveProjectInsight(dirPath: string, topic: string, insight: strin
     console.error("Error saving insight to AgentDB:", e);
     return { id: "err", timestamp: "", topic, insight, tags };
   }
-}
-
-// ========================================================
-// 🔌 MCP (MODEL CONTEXT PROTOCOL) SERVERS REGISTRY
-// ========================================================
-const DEFAULT_MCP_CATALOG = [
-  {
-    id: "github",
-    name: "GitHub MCP",
-    icon: "🐙",
-    desc: "Gestione repository, issue, pull request, commit e ricerca codice su GitHub.",
-    category: "DevOps & VCS",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-github"],
-    envKey: "GITHUB_PERSONAL_ACCESS_TOKEN",
-    envPlaceholder: "ghp_...",
-    enabled: false
-  },
-  {
-    id: "postgres",
-    name: "PostgreSQL & Supabase MCP",
-    icon: "🐘",
-    desc: "Ispezione schema database, query SQL in sola lettura, tabelle e relazioni.",
-    category: "Databases",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:password@localhost:5432/mydb"],
-    envKey: "POSTGRES_CONNECTION_STRING",
-    envPlaceholder: "postgresql://postgres:password@localhost:5432/dbname",
-    enabled: false
-  },
-  {
-    id: "sqlite",
-    name: "SQLite & DuckDB MCP",
-    icon: "🗄️",
-    desc: "Query ed esplorazione di database SQLite locali e file analitici DuckDB.",
-    category: "Databases",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-sqlite", "--db-path", "./data.db"],
-    envKey: "",
-    envPlaceholder: "",
-    enabled: false
-  },
-  {
-    id: "puppeteer",
-    name: "Playwright & Puppeteer Browser MCP",
-    icon: "🌐",
-    desc: "Navigazione web autonoma, screenshot di pagine, scraping e test di UI interattive.",
-    category: "Browser & Testing",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-puppeteer"],
-    envKey: "",
-    envPlaceholder: "",
-    enabled: false
-  },
-  {
-    id: "brave-search",
-    name: "Brave Search & Live Web MCP",
-    icon: "🔍",
-    desc: "Ricerca web in tempo reale e grounding di documentazione tecnica aggiornata.",
-    category: "Web & Search",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-brave-search"],
-    envKey: "BRAVE_API_KEY",
-    envPlaceholder: "BSA...",
-    enabled: false
-  },
-  {
-    id: "notion",
-    name: "Notion & Knowledge Base MCP",
-    icon: "📝",
-    desc: "Accesso, lettura e creazione di pagine, documenti e database Notion.",
-    category: "Productivity",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-notion"],
-    envKey: "NOTION_API_TOKEN",
-    envPlaceholder: "secret_...",
-    enabled: false
-  },
-  {
-    id: "linear",
-    name: "Linear & Jira Issue Tracker MCP",
-    icon: "🎯",
-    desc: "Creazione e sincronizzazione di issue, sprint, backlog e ticket di progetto.",
-    category: "Project Management",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-linear"],
-    envKey: "LINEAR_API_KEY",
-    envPlaceholder: "lin_api_...",
-    enabled: false
-  },
-  {
-    id: "slack",
-    name: "Slack & Discord Team Comms MCP",
-    icon: "💬",
-    desc: "Invio notifiche sui canali di team, report di build e avvisi di deployment.",
-    category: "Team & Comms",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-slack"],
-    envKey: "SLACK_BOT_TOKEN",
-    envPlaceholder: "xoxb-...",
-    enabled: false
-  },
-  {
-    id: "docker",
-    name: "Docker & Container Engine MCP",
-    icon: "🐳",
-    desc: "Ispezione container, docker-compose, log di servizio e build di immagini.",
-    category: "DevOps & Cloud",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-docker"],
-    envKey: "",
-    envPlaceholder: "",
-    enabled: false
-  },
-  {
-    id: "figma",
-    name: "Figma & Design Tokens MCP",
-    icon: "🎨",
-    desc: "Estrazione automatica di layout UI, stili CSS, colori e componenti Figma.",
-    category: "Design & Frontend",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-figma"],
-    envKey: "FIGMA_ACCESS_TOKEN",
-    envPlaceholder: "figd_...",
-    enabled: false
-  },
-  {
-    id: "agentdb",
-    name: "AgentDB Memoria Locale (JSON + embedding vettoriali reali)",
-    icon: "🧠",
-    desc: "Memoria persistente a 3 livelli (working/episodic/archival) salvata come JSON in .claude/agentdb.json. Ogni insight ha un embedding reale a 384 dimensioni (API di Ollama, nomic-embed-text, con fallback deterministico se il modello non è disponibile) e il recupero usato nei prompt è per similarità coseno reale rispetto alla richiesta corrente, non solo i più recenti.",
-    category: "AI & Memory",
-    command: "node",
-    args: ["../ruflo-main/ruflo-main/bin/cli.js", "mcp"],
-    envKey: "",
-    envPlaceholder: "",
-    // Disabilitato di default: il path sopra presuppone una cartella "ruflo-main" installata
-    // in una posizione relativa allo workspace dell'utente che nella pratica quasi mai esiste.
-    // Abilitarlo di default causava un export MCP rotto (comando non trovato) verso ~/.claude/mcp.json.
-    enabled: false
-  }
-];
-
-function loadMcpConfig(workspace: string) {
-  try {
-    const configFile = join(workspace, ".claude", "mcp_config.json");
-    if (existsSync(configFile)) {
-      const data = JSON.parse(readFileSync(configFile, "utf-8"));
-      return data.servers || DEFAULT_MCP_CATALOG;
-    }
-  } catch {}
-  return DEFAULT_MCP_CATALOG;
-}
-
-function saveMcpConfig(workspace: string, servers: any[]) {
-  try {
-    const claudeDir = join(workspace, ".claude");
-    if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
-    const configFile = join(claudeDir, "mcp_config.json");
-    writeFileSync(configFile, JSON.stringify({ mcpServers: servers, updatedAt: new Date().toISOString() }, null, 2), "utf-8");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Git Status & Smart Commit Helpers
-function getGitStatus(workspace: string) {
-  try {
-    const statusProc = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: workspace });
-    const diffProc = Bun.spawnSync(["git", "diff", "--stat"], { cwd: workspace });
-    const branchProc = Bun.spawnSync(["git", "branch", "--show-current"], { cwd: workspace });
-    const output = statusProc.stdout ? new TextDecoder().decode(statusProc.stdout).trim() : "";
-    const diff = diffProc.stdout ? new TextDecoder().decode(diffProc.stdout).trim() : "";
-    const branch = branchProc.stdout ? new TextDecoder().decode(branchProc.stdout).trim() : "main";
-    return {
-      isGit: statusProc.exitCode === 0,
-      branch: branch || "main",
-      hasChanges: output.length > 0,
-      rawStatus: output,
-      diffSummary: diff,
-      files: output.split("\n").filter(Boolean).map(l => l.trim())
-    };
-  } catch {
-    return { isGit: false, branch: "", hasChanges: false, rawStatus: "", diffSummary: "", files: [] };
-  }
-}
-
-// Security Secret Scanner (Ruflo Guardrails)
-function scanSecuritySecrets(workspace: string) {
-  const secretPatterns = [
-    { name: "Anthropic / OpenAI API Key", regex: /sk-[a-zA-Z0-9_\-]{20,}/g },
-    { name: "GitHub Personal Access Token", regex: /ghp_[a-zA-Z0-9]{30,}/g },
-    { name: "Slack Bot Token", regex: /xoxb-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{20,}/g },
-    { name: "Private RSA / SSH Key", regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g },
-    { name: "AWS Access Key ID", regex: /AKIA[0-9A-Z]{16}/g }
-  ];
-
-  const findings: Array<{ file: string; line: number; type: string; snippet: string }> = [];
-
-  const scanFile = (filePath: string) => {
-    try {
-      const content = readFileSync(filePath, "utf-8");
-      const lines = content.split("\n");
-      lines.forEach((line, idx) => {
-        for (const pat of secretPatterns) {
-          if (pat.regex.test(line)) {
-            findings.push({
-              file: relative(workspace, filePath),
-              line: idx + 1,
-              type: pat.name,
-              snippet: line.trim().slice(0, 80)
-            });
-          }
-        }
-      });
-    } catch {}
-  };
-
-  const walkScan = (dir: string, depth = 0) => {
-    if (depth > 4) return;
-    try {
-      const entries = readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.name.startsWith(".git") || entry.name === "node_modules" || entry.name === "dist" || entry.name === "build") continue;
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) walkScan(full, depth + 1);
-        else if (entry.isFile() && (entry.name.endsWith(".env") || entry.name.endsWith(".json") || entry.name.endsWith(".ts") || entry.name.endsWith(".js") || entry.name.endsWith(".py") || entry.name.endsWith(".rs"))) {
-          scanFile(full);
-        }
-      }
-    } catch {}
-  };
-
-  walkScan(workspace);
-  return {
-    scannedAt: new Date().toISOString(),
-    totalFindings: findings.length,
-    findings,
-    isSafe: findings.length === 0
-  };
 }
 
 // ========================================================
@@ -1837,106 +1095,6 @@ async function pickFolderNative(): Promise<string> {
     return out.trim();
   } catch {
     return "";
-  }
-}
-
-// ========================================================
-// 🎙️ REAL WHISPER VOICE TRANSCRIPTION (whisper.cpp, locale, non browser)
-// ------------------------------------------------------
-// Il README dichiarava onestamente che la dettatura vocale usa solo la
-// SpeechRecognition del browser e che "nessun modello Whisper è integrato".
-// Questo aggiunge una trascrizione Whisper REALE e locale via whisper.cpp
-// (binario 'whisper-cli' installato con `brew install whisper-cpp`) + un
-// modello GGML reale scaricato a parte (non incluso nel repo per dimensione,
-// vedi README). Se il binario o il modello non sono presenti, l'endpoint
-// dichiara onestamente l'errore invece di ricadere silenziosamente sul
-// motore del browser o fingere un risultato.
-let whisperCliPathCache: string | null | undefined = undefined;
-function findWhisperCliPath(): string | null {
-  if (whisperCliPathCache !== undefined) return whisperCliPathCache;
-  const candidates = ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli", "/usr/bin/whisper-cli"];
-  for (const c of candidates) {
-    if (existsSync(c)) { whisperCliPathCache = c; return c; }
-  }
-  try {
-    const proc = Bun.spawnSync(["which", "whisper-cli"]);
-    const out = new TextDecoder().decode(proc.stdout).trim();
-    if (out && existsSync(out)) { whisperCliPathCache = out; return out; }
-  } catch {}
-  whisperCliPathCache = null;
-  return null;
-}
-
-let whisperModelPathCache: string | null | undefined = undefined;
-function findWhisperModelPath(): string | null {
-  if (whisperModelPathCache !== undefined) return whisperModelPathCache;
-  const candidates = [
-    process.env.WHISPER_MODEL_PATH,
-    join(import.meta.dir, "whisper-models", "ggml-base.bin"),
-    join(homedir(), ".cache", "whisper.cpp", "ggml-base.bin")
-  ].filter(Boolean) as string[];
-  for (const c of candidates) {
-    if (existsSync(c)) { whisperModelPathCache = c; return c; }
-  }
-  whisperModelPathCache = null;
-  return null;
-}
-
-let ffmpegPathCache: string | null | undefined = undefined;
-function findFfmpegPath(): string | null {
-  if (ffmpegPathCache !== undefined) return ffmpegPathCache;
-  try {
-    const proc = Bun.spawnSync(["which", "ffmpeg"]);
-    const out = new TextDecoder().decode(proc.stdout).trim();
-    ffmpegPathCache = out && existsSync(out) ? out : null;
-  } catch { ffmpegPathCache = null; }
-  return ffmpegPathCache;
-}
-
-async function transcribeAudioWithWhisper(audioBytes: Uint8Array, sourceExt: string, language: string): Promise<{ text: string }> {
-  const whisperCli = findWhisperCliPath();
-  const modelPath = findWhisperModelPath();
-  const ffmpegPath = findFfmpegPath();
-  if (!whisperCli) throw new Error("whisper-cli non trovato. Installa con: brew install whisper-cpp");
-  if (!modelPath) throw new Error(`Modello Whisper (ggml-base.bin) non trovato. Scaricalo con: curl -L -o "${join(import.meta.dir, "whisper-models", "ggml-base.bin")}" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin`);
-  if (!ffmpegPath) throw new Error("ffmpeg non trovato (richiesto per convertire l'audio del browser in WAV 16kHz mono). Installa con: brew install ffmpeg");
-
-  const tmpId = crypto.randomUUID();
-  const rawPath = join(tmpdir(), `whisper-in-${tmpId}.${sourceExt}`);
-  const wavPath = join(tmpdir(), `whisper-in-${tmpId}.wav`);
-  const jsonOutPrefix = join(tmpdir(), `whisper-out-${tmpId}`);
-
-  try {
-    writeFileSync(rawPath, audioBytes);
-
-    const ffmpegProc = spawn({
-      cmd: [ffmpegPath, "-y", "-i", rawPath, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath],
-      stdout: "pipe",
-      stderr: "pipe"
-    });
-    const ffmpegExit = await ffmpegProc.exited;
-    if (ffmpegExit !== 0 || !existsSync(wavPath)) {
-      const err = await new Response(ffmpegProc.stderr).text();
-      throw new Error(`Conversione audio ffmpeg fallita: ${err.slice(0, 300)}`);
-    }
-
-    const whisperArgs = [whisperCli, "-m", modelPath, "-f", wavPath, "-np", "-oj", "-of", jsonOutPrefix];
-    if (language && language !== "auto") whisperArgs.push("-l", language);
-    const whisperProc = spawn({ cmd: whisperArgs, stdout: "pipe", stderr: "pipe" });
-    const whisperExit = await whisperProc.exited;
-    const jsonPath = `${jsonOutPrefix}.json`;
-    if (whisperExit !== 0 || !existsSync(jsonPath)) {
-      const err = await new Response(whisperProc.stderr).text();
-      throw new Error(`Trascrizione whisper.cpp fallita: ${err.slice(0, 300)}`);
-    }
-
-    const result = JSON.parse(readFileSync(jsonPath, "utf-8"));
-    const text = (result.transcription || []).map((seg: any) => seg.text || "").join(" ").trim();
-    return { text };
-  } finally {
-    for (const p of [rawPath, wavPath, `${jsonOutPrefix}.json`]) {
-      try { if (existsSync(p)) unlinkSync(p); } catch {}
-    }
   }
 }
 
@@ -2859,22 +2017,8 @@ const server = Bun.serve({
           if (!command) {
             return new Response(JSON.stringify({ error: "Comando obbligatorio" }), { status: 400, headers });
           }
-
-          const startedAt = Date.now();
-          const proc = Bun.spawn(["bash", "-c", command], { cwd: workspace, stdout: "pipe", stderr: "pipe" });
-          const [outStr, errStr] = await Promise.all([
-            new Response(proc.stdout).text(),
-            new Response(proc.stderr).text()
-          ]);
-          const exitCode = await proc.exited;
-
-          return new Response(JSON.stringify({
-            command,
-            exitCode,
-            stdout: outStr.slice(0, 20000),
-            stderr: errStr.slice(0, 20000),
-            durationMs: Date.now() - startedAt
-          }), { headers });
+          const result = await execTerminalCommand(command, workspace);
+          return new Response(JSON.stringify(result), { headers });
         } catch (e: any) {
           return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
         }
@@ -2983,26 +2127,10 @@ const server = Bun.serve({
       if (url.pathname === "/api/models/huggingface/search" && req.method === "GET") {
         try {
           const q = url.searchParams.get("q") || "";
-          const hfRes = await fetch(
-            `https://huggingface.co/api/models?search=${encodeURIComponent(q)}&filter=gguf&sort=downloads&direction=-1&limit=20`,
-            { signal: AbortSignal.timeout(8000) }
-          );
-          if (!hfRes.ok) {
-            return new Response(JSON.stringify({ error: `Hugging Face API returned HTTP ${hfRes.status}` }), { status: 502, headers });
-          }
-          const data: any = await hfRes.json();
-          const results = Array.isArray(data)
-            ? data.map((m: any) => ({
-                id: m.id,
-                author: m.author || m.id.split("/")[0],
-                downloads: m.downloads || 0,
-                likes: m.likes || 0,
-                tags: m.tags || []
-              }))
-            : [];
+          const results = await searchHfModels(q);
           return new Response(JSON.stringify({ results }), { headers });
         } catch (e: any) {
-          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+          return new Response(JSON.stringify({ error: e.message }), { status: 502, headers });
         }
       }
 
@@ -3016,27 +2144,10 @@ const server = Bun.serve({
         try {
           const repo = url.searchParams.get("repo") || "";
           if (!repo) return new Response(JSON.stringify({ error: "repo obbligatorio" }), { status: 400, headers });
-          const hfRes = await fetch(`https://huggingface.co/api/models/${repo}`, { signal: AbortSignal.timeout(8000) });
-          if (!hfRes.ok) {
-            return new Response(JSON.stringify({ error: `Hugging Face API returned HTTP ${hfRes.status}` }), { status: 502, headers });
-          }
-          const data: any = await hfRes.json();
-          const siblings: any[] = Array.isArray(data.siblings) ? data.siblings : [];
-          const files = siblings
-            .map((s: any) => s.rfilename as string)
-            .filter((name: string) => name.endsWith(".gguf") && !/-\d{5}-of-\d{5}\.gguf$/i.test(name))
-            .map((name: string) => {
-              // The quant label is the last hyphen-separated segment (it can
-              // itself contain underscores, e.g. "Q4_K_M" or "q3_k_m") —
-              // splitting on underscores/dots too would cut "Q4_K_M" down to
-              // just "M".
-              const base = name.replace(/\.gguf$/i, "");
-              const quant = base.split("-").pop() || base;
-              return { filename: name, quantTag: quant.toUpperCase() };
-            });
+          const files = await listHfGgufFiles(repo);
           return new Response(JSON.stringify({ repo, files }), { headers });
         } catch (e: any) {
-          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+          return new Response(JSON.stringify({ error: e.message }), { status: 502, headers });
         }
       }
 
@@ -3930,7 +3041,7 @@ ${actionHistory.slice(-8).join("\n\n") || "(nessuna azione ancora, questo è il 
             return new Response(JSON.stringify({ error: "Comando obbligatorio" }), { status: 400, headers });
           }
 
-          const id = `proc-${processCounter++}`;
+          const id = nextProcessId();
           const name = body.name || command.split(" ")[0] || `Processo #${id}`;
           const cwd = body.cwd ? resolve(attachedWorkspacePath, body.cwd) : attachedWorkspacePath;
 
