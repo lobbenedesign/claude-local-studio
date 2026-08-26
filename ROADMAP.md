@@ -35,39 +35,42 @@ manuale nel browser del path toccato → commit separato.
 
 Ordine pianificato (per rischio crescente):
 
-1. [x] `src/integrations/whisper.ts` — trascrizione audio (isolato, nessuna
-       dipendenza da altri moduli).
-2. [x] `src/integrations/mcp.ts` — catalogo/config server MCP (solo I/O su
-       file di config, isolato).
+1. [x] `src/integrations/whisper.ts` — trascrizione audio.
+2. [x] `src/integrations/mcp.ts` — catalogo/config server MCP.
 3. [x] `src/processes/background-process.ts` — dev server multiplexer (cmux).
 4. [x] `src/models/catalogs.ts`, `src/models/huggingface.ts` — cataloghi
-       statici e ricerca/file Hugging Face. **Non ancora estratti**: il probe
-       dei motori locali (lmstudio/mlx/exo/ktransformers/airllm/llamafile) e
-       il pass-through pull/delete restano inline in `server.ts` — sono
-       piccoli wrapper su fetch, a basso rischio, ma non ancora spostati.
-5. [x] `src/workspace/git.ts`, `security-scan.ts`, `terminal.ts`. **Non
-       ancora estratto**: `files.ts` (read/diff-preview/diff-apply/rules-save)
-       — più corposo, prossimo step naturale.
-6. [ ] `src/workspace/codebase-index.ts`, `memory.ts` — repo-map AST,
-       embedding, memoria gerarchica.
-7. [ ] `src/providers/` — registry.ts (sostituisce la catena di ~20 `if` con
-       una tabella dichiarativa), dispatch.ts, openai-compat.ts, gemini.ts.
-       È il pezzo più delicato: tocca `handleAnthropicProxy`.
+       statici e ricerca/file Hugging Face. **Non estratti** (basso rischio,
+       piccoli wrapper su fetch inline): probe motori locali
+       (lmstudio/mlx/exo/ktransformers/airllm/llamafile) e pass-through
+       pull/delete in `GET /api/models`.
+5. [x] `src/workspace/git.ts`, `security-scan.ts`, `terminal.ts`, `files.ts`
+       (read/diff-preview/diff-apply/rules-save).
+6. [x] `src/workspace/memory.ts` (AgentDB/RuVector), `repo-map.ts` (AST +
+       tree-sitter + regex fallback), `codebase-index.ts` (ricerca semantica
+       @codebase), `context.ts` (analyzeProjectContext + resolveContextMentions).
+       `src/stats.ts` aggiunto come effetto collaterale necessario (vedi sotto).
+7. [~] `src/providers/openai-compat.ts` estratto (handleOpenAICompatibleStream,
+       transformSSEToAnthropic, transformNDJSONToAnthropic, authErrorResponse).
+       **Deliberatamente non estratto**: `handleAnthropicProxy` stesso (~360
+       righe, la catena if di ~20 provider cloud + motori locali) e la
+       riscrittura a "registry dichiarativo" prevista in origine. Motivo:
+       legge/scrive ~20 variabili globali `let xxxApiKey` mutabili (vedi step 9)
+       — estrarlo bene richiede prima risolvere lo step 9, altrimenti il rischio
+       di rompere silenziosamente un provider su 20 è alto e difficile da
+       verificare uno per uno nel tempo disponibile. Lasciato intenzionalmente
+       per una sessione dedicata.
 8. [ ] `src/agent/` — run.ts, autodebug.ts, autonomous-loop.ts, ensemble.ts.
-       Dipendono dai provider, vanno estratti per ultimi. Nota: i 4 flussi
-       oggi chiamano `handleAnthropicProxy` via self-HTTP-loopback (`fetch`
-       verso `localhost:${PORT}/v1/messages`), non chiamata diretta di
-       funzione — da decidere se mantenere questo pattern o passare a una
-       firma tipizzata diretta in fase di estrazione.
+       Dipendono dai provider (self-HTTP-loopback verso `handleAnthropicProxy`,
+       `fetch` verso `localhost:${PORT}/v1/messages`, non chiamata diretta di
+       funzione) — da fare dopo lo step 7 completo.
 9. [ ] `src/config/app-config.ts` — le ~20 variabili globali `let xxxApiKey`
-       diventano uno store centralizzato invece di variabili sciolte.
-10. [ ] `src/routes/index.ts` + `server.ts` finale ridotto a poche righe
-        (crea `Bun.serve`, monta le route, avvia Telegram polling).
+       diventano uno store centralizzato. Prerequisito reale per completare lo
+       step 7 a basso rischio.
+10. [ ] `src/routes/index.ts` + `server.ts` finale ridotto a poche righe.
 
 Trovato durante la mappatura: `currentAgentProcess` (variabile globale per
 "stop agent") non è mai assegnato da nessuno dei 4 flussi agentici attuali —
-probabile codice morto, da verificare/rimuovere durante lo step 8 invece di
-trascinarlo nel refactor.
+probabile codice morto, da verificare/rimuovere durante lo step 8.
 
 ## Fase 2 — Sicurezza da prodotto reale
 
@@ -109,21 +112,42 @@ trascinarlo nel refactor.
   costante `PORT` — sarebbe silenziosamente rimasto rotto se qualcuno
   avesse cambiato porta dopo il fix sopra. Corretto.
 
+## Bug scoperti e corretti durante la Fase 1
+
+- Nell'estrarre `repo-map.ts`, il path del WASM di tree-sitter usava
+  `import.meta.dir` assumendo di trovarsi nella root del progetto
+  (`node_modules/tree-sitter-wasms/...`). Spostando il codice in
+  `src/workspace/repo-map.ts`, `import.meta.dir` punta invece a quella
+  cartella, rompendo il caricamento delle grammatiche. Corretto con
+  `join(import.meta.dir, "..", "..", "node_modules", ...)` e riverificato:
+  il log di avvio mostra di nuovo "🌳 Tree-sitter AST reale attivo per: py,
+  rs, go, java, c, cpp" e l'endpoint `/api/workspace/repo-map` produce
+  output AST reale.
+- Un controllo `if (!filePath)` in `/api/workspace/file/diff-preview` e
+  `/diff-apply` era dead code: `resolve(body.filePath || "")` ritorna sempre
+  la cwd (verità), quindi la validazione non scattava mai — un `filePath`
+  mancante finiva silenziosamente a fare diff sulla cartella di lavoro
+  invece di un 400 pulito. Corretto controllando `body.filePath` prima del
+  resolve, in `src/workspace/files.ts`.
+
 ## Stato
 
-Fase 0 completa (test + CI + i due bug di cui sopra).
+Fase 0 completa (test + CI + i due bug di Fase 0).
 
-Fase 1: **`server.ts` passato da 4.721 a 3.832 righe (-19%)**, 8 nuovi
-moduli estratti (whisper, mcp, background-process, catalogs, huggingface,
-git, security-scan, terminal). Ogni step verificato con build pulita, 4/4
-smoke test verdi, e verifica manuale via curl dell'endpoint toccato
-(`/api/mcp/servers`, `/api/processes/*`, `/api/workspace/git/status`,
-`/api/workspace/security/scan`, `/api/workspace/terminal/exec`) — stesso
-output di prima dell'estrazione in ogni caso.
+Fase 1: **`server.ts` passato da 4.721 a 2.765 righe (-41%)**, 14 nuovi
+moduli estratti in `src/` (whisper, mcp, background-process, catalogs,
+huggingface, git, security-scan, terminal, files, memory, repo-map,
+codebase-index, context, stats, providers/openai-compat). Ogni step
+verificato con build pulita, 4/4 smoke test verdi, e verifica manuale via
+curl/browser dell'endpoint toccato — inclusi test end-to-end reali (pull
+Hugging Face installato e poi rimosso da Ollama, chat proxy reale con
+streaming SSE, diff-apply che scrive davvero su disco con controllo dei
+confini del workspace).
 
-Restano da estrarre (in ordine di rischio crescente): il probe motori
-locali + pull/delete pass-through in `src/models/`, `src/workspace/files.ts`,
-`codebase-index.ts`/`memory.ts`, poi il pezzo più delicato —
-`src/providers/` (tocca `handleAnthropicProxy`) e `src/agent/` (dipende dai
-provider, usa self-HTTP-loopback verso `handleAnthropicProxy` — vedi nota
-sopra allo step 8). Aggiornare le checkbox qui sopra ad ogni sessione futura.
+**Step 7 (providers) lasciato volutamente incompleto**: `handleAnthropicProxy`
+resta in `server.ts` perché dipende da ~20 variabili globali mutabili
+(`let xxxApiKey`) che vanno prima consolidate in un vero config store
+(step 9) per poter estrarre il dispatch senza rischio. Anche `src/agent/`
+(step 8) e `src/routes/` + `server.ts` finale (step 10) restano da fare,
+nello stesso ordine di dipendenza. Aggiornare le checkbox qui sopra ad ogni
+sessione futura.

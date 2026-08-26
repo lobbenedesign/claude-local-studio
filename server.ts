@@ -2,9 +2,7 @@ import { spawn, type Subprocess } from "bun";
 import { join, resolve, relative, basename, dirname, sep } from "path";
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
 import { homedir, tmpdir } from "os";
-import * as ts from "typescript";
 import * as Diff from "diff";
-import TSParser from "web-tree-sitter";
 import { transcribeAudioWithWhisper } from "./src/integrations/whisper";
 import { loadMcpConfig, saveMcpConfig } from "./src/integrations/mcp";
 import { backgroundProcesses, launchProcess, nextProcessId } from "./src/processes/background-process";
@@ -23,6 +21,36 @@ import { searchHfModels, listHfGgufFiles } from "./src/models/huggingface";
 import { getGitStatus } from "./src/workspace/git";
 import { scanSecuritySecrets } from "./src/workspace/security-scan";
 import { execTerminalCommand } from "./src/workspace/terminal";
+import {
+  readWorkspaceFile,
+  computeDiffPreview,
+  applyFileDiff,
+  saveProjectRules,
+  WorkspaceBoundaryError,
+  FileTooLargeError,
+  DiffConflictError
+} from "./src/workspace/files";
+import {
+  type AgentInsight,
+  type HierarchicalMemory,
+  generateEmbedding,
+  cosineSimilarity,
+  getProjectHierarchicalMemory,
+  saveProjectHierarchicalMemory,
+  getProjectMemory,
+  getRelevantMemories,
+  saveProjectInsight
+} from "./src/workspace/memory";
+import { buildAstRepoMap } from "./src/workspace/repo-map";
+import { buildOrUpdateCodebaseIndex, semanticCodebaseSearch } from "./src/workspace/codebase-index";
+import { analyzeProjectContext, resolveContextMentions } from "./src/workspace/context";
+import { addTokensProcessed, getTokensProcessed } from "./src/stats";
+import {
+  authErrorResponse,
+  handleOpenAICompatibleStream,
+  transformSSEToAnthropic,
+  transformNDJSONToAnthropic
+} from "./src/providers/openai-compat";
 
 const PORT = Number(process.env.PORT) || 3001;
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
@@ -150,7 +178,6 @@ let telegramEnabled = initialConfig.telegramEnabled || false;
 let isTelegramPolling = false;
 
 let currentAgentProcess: Subprocess | null = null;
-let totalTokensProcessed = 210000;
 let sessionStartTime = Date.now();
 
 // Telegram Bot Message Sender
@@ -227,7 +254,7 @@ async function startTelegramPolling(server: any) {
             const status = `🖥️ STATO CLAUDE STUDIO\n\n` +
               `🤖 Modello Attivo: ${activeModel}\n` +
               `📂 Workspace: ${attachedWorkspacePath}\n` +
-              `⚡ Token: ${totalTokensProcessed.toLocaleString()}\n` +
+              `⚡ Token: ${getTokensProcessed().toLocaleString()}\n` +
               `🖥️ Processi cmux: ${backgroundProcesses.size} attivi`;
             await sendTelegramMessage(chatId, status);
           } else if (userText === "/models") {
@@ -288,767 +315,6 @@ const possibleCliPaths = [
   join(import.meta.dir, "claude-code-main", "dist", "cli.js")
 ];
 let CLAUDE_CLI_PATH = possibleCliPaths.find(p => existsSync(p)) || possibleCliPaths[0];
-
-// Recursive file tree reader
-function getDirectoryTree(dirPath: string, maxDepth = 3, currentDepth = 0): any[] {
-  if (currentDepth > maxDepth || !existsSync(dirPath)) return [];
-  try {
-    const entries = readdirSync(dirPath, { withFileTypes: true });
-    const result: any[] = [];
-
-    for (const entry of entries) {
-      if (
-        entry.name.startsWith(".") ||
-        entry.name === "node_modules" ||
-        entry.name === "dist" ||
-        entry.name === "build" ||
-        entry.name === ".git" ||
-        entry.name === ".snapshots"
-      ) {
-        continue;
-      }
-
-      const fullPath = join(dirPath, entry.name);
-      try {
-        const isDir = entry.isDirectory();
-        const stat = statSync(fullPath);
-
-        result.push({
-          name: entry.name,
-          path: fullPath,
-          isDirectory: isDir,
-          size: isDir ? 0 : stat.size,
-          children: isDir ? getDirectoryTree(fullPath, maxDepth, currentDepth + 1) : undefined
-        });
-      } catch {}
-    }
-
-    return result.sort((a, b) => {
-      if (a.isDirectory && !b.isDirectory) return -1;
-      if (!a.isDirectory && b.isDirectory) return 1;
-      return a.name.localeCompare(b.name);
-    });
-  } catch {
-    return [];
-  }
-}
-
-// Project context analyzer
-function analyzeProjectContext(dirPath: string) {
-  if (!existsSync(dirPath)) return { error: "Directory not found" };
-
-  const tree = getDirectoryTree(dirPath, 2);
-  let totalFiles = 0;
-  let detectedFrameworks: string[] = [];
-  let readmeSnippet = "";
-
-  const checkFile = (name: string) => existsSync(join(dirPath, name));
-
-  if (checkFile("package.json")) detectedFrameworks.push("Node.js / JavaScript");
-  if (checkFile("requirements.txt") || checkFile("pyproject.toml")) detectedFrameworks.push("Python");
-  if (checkFile("pubspec.yaml")) detectedFrameworks.push("Flutter / Dart");
-  if (checkFile("Cargo.toml")) detectedFrameworks.push("Rust");
-  if (checkFile("go.mod")) detectedFrameworks.push("Go");
-  if (checkFile("tsconfig.json")) detectedFrameworks.push("TypeScript");
-
-  const countFiles = (nodes: any[]) => {
-    for (const n of nodes) {
-      if (n.isDirectory && n.children) countFiles(n.children);
-      else totalFiles++;
-    }
-  };
-  countFiles(tree);
-
-  const readmeFiles = ["README.md", "readme.md", "README"];
-  for (const rf of readmeFiles) {
-    const p = join(dirPath, rf);
-    if (existsSync(p)) {
-      try {
-        readmeSnippet = readFileSync(p, "utf-8").slice(0, 1500);
-        break;
-      } catch {}
-    }
-  }
-
-  let rulesFileName = "";
-  let rulesSnippet = "";
-  const possibleRules = [".cursorrules", ".cursor/rules", "CLAUDE.md", "claude.md", "AGENTS.md", "GEMINI.md", ".windsurfrules"];
-  for (const rf of possibleRules) {
-    const p = join(dirPath, rf);
-    if (existsSync(p)) {
-      try {
-        rulesFileName = rf;
-        rulesSnippet = readFileSync(p, "utf-8");
-        break;
-      } catch {}
-    }
-  }
-
-  // Load AgentDB / Ruflo Vector Memory
-  const memories = getProjectMemory(dirPath);
-  const memorySnippet = memories.slice(0, 5).map((m: any) => `• [${m.topic}]: ${m.insight}`).join("\n");
-
-  return {
-    folderName: basename(dirPath),
-    fullPath: dirPath,
-    totalFiles,
-    frameworks: detectedFrameworks.length ? detectedFrameworks : ["Generic Project"],
-    readmeSnippet,
-    rulesFileName,
-    rulesSnippet,
-    hasRulesFile: !!rulesFileName,
-    memoriesCount: memories.length,
-    memorySnippet,
-    memories,
-    tree
-  };
-}
-
-// AgentDB & RuVector Memory Functions
-interface AgentInsight {
-  id: string;
-  timestamp: string;
-  topic: string;
-  insight: string;
-  tags: string[];
-  embedding?: number[]; // 384-dim reale, vedi generateEmbedding()
-}
-
-// --- Vera memoria vettoriale: embedding reali (Ollama se disponibile) + coseno reale ---
-// Sostituisce il recupero "solo i piu' recenti" con una ricerca per similarita' semantica
-// reale rispetto al prompt corrente dell'utente, come promesso dal nome "RuVector Memory"
-// ma che finora non faceva davvero (era un elenco cronologico puro).
-const EMBED_DIM = 384;
-
-async function generateEmbedding(text: string): Promise<number[]> {
-  const trimmed = (text || "").trim();
-  if (!trimmed) return new Array(EMBED_DIM).fill(0);
-
-  // 1. Tentativo reale: API di embedding di Ollama locale (nomic-embed-text)
-  try {
-    const res = await fetch(`${OLLAMA_HOST}/api/embeddings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "nomic-embed-text", prompt: trimmed }),
-      signal: AbortSignal.timeout(3000)
-    });
-    if (res.ok) {
-      const data: any = await res.json();
-      if (Array.isArray(data.embedding) && data.embedding.length > 0) {
-        return l2Normalize(data.embedding);
-      }
-    }
-  } catch {}
-
-  // 2. Fallback reale e deterministico: hashing denso di trigrammi/subword,
-  // normalizzato L2. Non e' un embedding neurale, ma e' matematica reale
-  // (non Math.random()): stessa parola -> stesso hash -> stessa direzione nel
-  // vettore, quindi testi con parole in comune ottengono coseno > 0 per davvero.
-  const vec = new Float64Array(EMBED_DIM);
-  const words = trimmed.toLowerCase().split(/[^a-z0-9àèéìòù_]+/i).filter(w => w.length > 0);
-  for (let wi = 0; wi < words.length; wi++) {
-    const w = words[wi];
-    const weight = 1.0 / Math.sqrt(wi + 1);
-    let h = 2166136261;
-    for (let i = 0; i < w.length; i++) {
-      h ^= w.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    const idx = Math.abs(h) % EMBED_DIM;
-    vec[idx] += (h > 0 ? 1 : -1) * weight;
-    for (let n = 0; n < w.length - 2; n++) {
-      const tri = w.slice(n, n + 3);
-      let h2 = 2166136261;
-      for (let i = 0; i < tri.length; i++) {
-        h2 ^= tri.charCodeAt(i);
-        h2 = Math.imul(h2, 16777619);
-      }
-      vec[Math.abs(h2) % EMBED_DIM] += (h2 > 0 ? 0.5 : -0.5) * weight;
-    }
-  }
-  return l2Normalize(Array.from(vec));
-}
-
-function l2Normalize(v: number[]): number[] {
-  const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
-  return norm > 0 ? v.map(x => x / norm) : v;
-}
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (!a || !b || a.length !== b.length) return 0;
-  let dot = 0;
-  for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
-  return dot; // vettori gia' L2-normalizzati -> il dot product E' la coseno similarity
-}
-
-export interface HierarchicalMemory {
-  workingScratchpad: string;
-  episodic: AgentInsight[];
-  archival: AgentInsight[];
-}
-
-function getProjectMemory(dirPath: string): AgentInsight[] {
-  const h = getProjectHierarchicalMemory(dirPath);
-  return [...h.archival, ...h.episodic];
-}
-
-// Ricerca REALE per similarità semantica rispetto a una query (il prompt corrente
-// dell'utente), non solo "i più recenti". Ricordi salvati prima dell'introduzione
-// degli embedding non ne hanno uno: viene calcolato al volo (reale) e salvato per
-// le richieste successive, cosi' il costo si paga una volta sola per ricordo.
-async function getRelevantMemories(dirPath: string, query: string, topN = 5): Promise<AgentInsight[]> {
-  const h = getProjectHierarchicalMemory(dirPath);
-  const all = [...h.archival, ...h.episodic];
-  if (all.length === 0) return [];
-
-  const queryVec = await generateEmbedding(query);
-  let mutated = false;
-  const scored = await Promise.all(all.map(async (m) => {
-    if (!m.embedding) {
-      m.embedding = await generateEmbedding(`${m.topic} ${m.insight}`);
-      mutated = true;
-    }
-    return { memory: m, score: cosineSimilarity(queryVec, m.embedding) };
-  }));
-
-  if (mutated) {
-    saveProjectHierarchicalMemory(dirPath, h); // persiste gli embedding calcolati al volo
-  }
-
-  return scored.sort((a, b) => b.score - a.score).slice(0, topN).map(s => s.memory);
-}
-
-function getProjectHierarchicalMemory(dirPath: string): HierarchicalMemory {
-  try {
-    const memoryFile = join(dirPath, ".claude", "agentdb.json");
-    if (existsSync(memoryFile)) {
-      const data = JSON.parse(readFileSync(memoryFile, "utf-8"));
-      if (Array.isArray(data)) {
-        return {
-          workingScratchpad: "",
-          episodic: [],
-          archival: data
-        };
-      }
-      return {
-        workingScratchpad: data.workingScratchpad || "",
-        episodic: Array.isArray(data.episodic) ? data.episodic : [],
-        archival: Array.isArray(data.archival) ? data.archival : []
-      };
-    }
-  } catch {}
-  return {
-    workingScratchpad: "",
-    episodic: [],
-    archival: []
-  };
-}
-
-function saveProjectHierarchicalMemory(dirPath: string, mem: Partial<HierarchicalMemory>) {
-  try {
-    const claudeDir = join(dirPath, ".claude");
-    if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
-    const memoryFile = join(claudeDir, "agentdb.json");
-    const current = getProjectHierarchicalMemory(dirPath);
-    const updated: HierarchicalMemory = {
-      workingScratchpad: mem.workingScratchpad !== undefined ? mem.workingScratchpad : current.workingScratchpad,
-      episodic: mem.episodic !== undefined ? mem.episodic : current.episodic,
-      archival: mem.archival !== undefined ? mem.archival : current.archival
-    };
-    writeFileSync(memoryFile, JSON.stringify(updated, null, 2), "utf-8");
-    return updated;
-  } catch (e) {
-    console.error("Error saving hierarchical memory:", e);
-    return getProjectHierarchicalMemory(dirPath);
-  }
-}
-
-async function saveProjectInsight(dirPath: string, topic: string, insight: string, tags: string[] = []): Promise<AgentInsight> {
-  try {
-    const current = getProjectHierarchicalMemory(dirPath);
-    const embedding = await generateEmbedding(`${topic} ${insight}`);
-    const newInsight: AgentInsight = {
-      id: `mem-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      topic,
-      insight,
-      tags,
-      embedding
-    };
-    current.archival.unshift(newInsight);
-    if (current.archival.length > 50) current.archival = current.archival.slice(0, 50);
-    saveProjectHierarchicalMemory(dirPath, current);
-    return newInsight;
-  } catch (e) {
-    console.error("Error saving insight to AgentDB:", e);
-    return { id: "err", timestamp: "", topic, insight, tags };
-  }
-}
-
-// ========================================================
-// 🗺️ REPO MAP (SYMBOL & SIGNATURE EXTRACTOR)
-// ------------------------------------------------------
-// Inspired by Aider's repo-map concept (github.com/Aider-AI/aider), which
-// parses source files with tree-sitter to extract real function/class
-// definitions instead of guessing from raw text.
-//
-// This implementation is HONEST about what it does per language:
-//  - .ts/.tsx/.js/.jsx/.mjs/.cjs  -> parsed with the REAL TypeScript
-//    Compiler API (`typescript` npm package, ts.createSourceFile +
-//    AST traversal via ts.forEachChild). This is a genuine Abstract
-//    Syntax Tree, not a text/regex scan: it correctly ignores strings,
-//    comments, and symbol-shaped text inside template literals, and it
-//    extracts real parameter/return type signatures from the parsed
-//    nodes (FunctionDeclaration, ClassDeclaration + its members,
-//    InterfaceDeclaration, TypeAliasDeclaration, exported const
-//    arrow-functions, EnumDeclaration).
-//  - every other language (Python, Rust, Dart, Go, Java, C/C++, ...)
-//    -> there is no bundled parser for these here, so it falls back to
-//    a line-based regex scan. Each such file is explicitly tagged
-//    "[regex]" in the output so callers/LLMs know it is a heuristic,
-//    not a verified AST, extraction.
-// ========================================================
-
-const AST_PARSEABLE_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs"]);
-
-function scriptKindForExt(ext: string): ts.ScriptKind {
-  switch (ext) {
-    case "tsx": return ts.ScriptKind.TSX;
-    case "jsx": return ts.ScriptKind.JSX;
-    case "js": case "mjs": case "cjs": return ts.ScriptKind.JS;
-    default: return ts.ScriptKind.TS;
-  }
-}
-
-// Real AST extraction using the TypeScript Compiler API.
-function extractSymbolsViaTypeScriptAst(filePath: string, content: string, ext: string): string[] {
-  const symbols: string[] = [];
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    content,
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true,
-    scriptKindForExt(ext)
-  );
-
-  const signatureOf = (node: ts.Node): string => {
-    // Grab the node's own text up to the body/brace, trimmed to one line.
-    const full = node.getText(sourceFile);
-    const braceIdx = full.indexOf("{");
-    const arrowBodyIdx = full.indexOf("=>");
-    let cut = full.length;
-    if (braceIdx > -1) cut = Math.min(cut, braceIdx);
-    if (arrowBodyIdx > -1 && arrowBodyIdx < cut) cut = arrowBodyIdx + 2;
-    return full.slice(0, cut).replace(/\s+/g, " ").trim().slice(0, 140);
-  };
-
-  const isExported = (node: ts.Node): boolean => {
-    const mods = (ts as any).canHaveModifiers?.(node) ? ts.getModifiers(node as any) : undefined;
-    return !!mods?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
-  };
-
-  const visit = (node: ts.Node) => {
-    if (ts.isFunctionDeclaration(node) && node.name) {
-      symbols.push(signatureOf(node).replace(/^(export\s+)?(default\s+)?/, isExported(node) ? "export " : ""));
-    } else if (ts.isClassDeclaration(node) && node.name) {
-      const heritage = node.heritageClauses?.map(h => h.getText(sourceFile)).join(" ") || "";
-      symbols.push(`${isExported(node) ? "export " : ""}class ${node.name.text}${heritage ? " " + heritage : ""}`);
-      for (const member of node.members) {
-        if (ts.isMethodDeclaration(member) || ts.isConstructorDeclaration(member)) {
-          symbols.push(`  .${signatureOf(member)}`);
-        } else if (ts.isPropertyDeclaration(member) && member.name) {
-          symbols.push(`  .${signatureOf(member)}`);
-        }
-      }
-    } else if (ts.isInterfaceDeclaration(node)) {
-      symbols.push(`${isExported(node) ? "export " : ""}interface ${node.name.text}`);
-    } else if (ts.isTypeAliasDeclaration(node)) {
-      symbols.push(`${isExported(node) ? "export " : ""}type ${node.name.text} = ${node.type.getText(sourceFile).slice(0, 60)}`);
-    } else if (ts.isEnumDeclaration(node)) {
-      symbols.push(`${isExported(node) ? "export " : ""}enum ${node.name.text}`);
-    } else if (ts.isVariableStatement(node)) {
-      for (const decl of node.declarationList.declarations) {
-        if (decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) && ts.isIdentifier(decl.name)) {
-          symbols.push(`${isExported(node) ? "export " : ""}const ${decl.name.text} = ${signatureOf(decl.initializer)}`);
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(sourceFile);
-
-  // Surface real parser diagnostics so a syntactically broken file is
-  // reported honestly rather than silently returning an empty map.
-  const syntacticErrors = (sourceFile as any).parseDiagnostics as ts.Diagnostic[] | undefined;
-  if (syntacticErrors && syntacticErrors.length > 0 && symbols.length === 0) {
-    symbols.push(`[ast-parse-error] ${syntacticErrors.length} syntax error(s) detected by TS parser`);
-  }
-
-  return symbols;
-}
-
-// Real multi-language AST via tree-sitter (Aider/Continue style, reale non regex).
-// Grammatiche WASM precompilate (tree-sitter-wasms) caricate una volta all'avvio.
-// Se il caricamento fallisce per un linguaggio (es. build incompatibile, come
-// osservato per Dart/ABI 15 con questo runtime), quel linguaggio ricade
-// onestamente sul regex fallback esistente invece di rompersi silenziosamente.
-interface TreeSitterLangConfig {
-  wasmFile: string;
-  containerTypes: Set<string>;
-  functionTypes: Set<string>;
-  nodeFilter?: (node: any) => boolean;
-}
-
-const TREE_SITTER_LANG_CONFIG: Record<string, TreeSitterLangConfig> = {
-  py: { wasmFile: "tree-sitter-python.wasm", containerTypes: new Set(["class_definition"]), functionTypes: new Set(["function_definition"]) },
-  rs: { wasmFile: "tree-sitter-rust.wasm", containerTypes: new Set(["struct_item", "enum_item", "trait_item", "impl_item"]), functionTypes: new Set(["function_item", "function_signature_item"]) },
-  go: { wasmFile: "tree-sitter-go.wasm", containerTypes: new Set(), functionTypes: new Set(["type_declaration", "function_declaration", "method_declaration"]) },
-  java: { wasmFile: "tree-sitter-java.wasm", containerTypes: new Set(["class_declaration", "interface_declaration", "enum_declaration"]), functionTypes: new Set(["method_declaration", "constructor_declaration"]) },
-  c: { wasmFile: "tree-sitter-c.wasm", containerTypes: new Set(["struct_specifier"]), functionTypes: new Set(["function_definition"]) },
-  cpp: { wasmFile: "tree-sitter-cpp.wasm", containerTypes: new Set(["class_specifier", "struct_specifier"]), functionTypes: new Set(["function_definition", "field_declaration"]), nodeFilter: (n) => n.type !== "field_declaration" || (n.text as string).includes("(") },
-};
-
-const EXT_TO_TREE_SITTER_LANG: Record<string, string> = {
-  py: "py", rs: "rs", go: "go", java: "java", c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp"
-};
-
-const TREE_SITTER_LANG_CACHE: Record<string, any> = {};
-
-async function initTreeSitterLanguages() {
-  try {
-    await TSParser.init();
-    for (const [key, cfg] of Object.entries(TREE_SITTER_LANG_CONFIG)) {
-      try {
-        const wasmPath = join(import.meta.dir, "node_modules", "tree-sitter-wasms", "out", cfg.wasmFile);
-        TREE_SITTER_LANG_CACHE[key] = await TSParser.Language.load(wasmPath);
-      } catch (e: any) {
-        console.error(`[tree-sitter] grammatica reale per '${key}' non caricata, questo linguaggio userà il fallback regex: ${e.message}`);
-      }
-    }
-    console.log(`🌳 Tree-sitter AST reale attivo per: ${Object.keys(TREE_SITTER_LANG_CACHE).join(", ") || "nessuno (fallback regex per tutti)"}`);
-  } catch (e: any) {
-    console.error(`[tree-sitter] init del runtime WASM fallito, repo map multi-linguaggio userà solo il fallback regex: ${e.message}`);
-  }
-}
-await initTreeSitterLanguages();
-
-// Real AST extraction via tree-sitter per Python/Rust/Go/Java/C/C++.
-// Ritorna null se la grammatica non è disponibile (il chiamante ricade sul regex fallback).
-function extractSymbolsViaTreeSitter(langKey: string, content: string): string[] | null {
-  const lang = TREE_SITTER_LANG_CACHE[langKey];
-  const cfg = TREE_SITTER_LANG_CONFIG[langKey];
-  if (!lang || !cfg) return null;
-
-  const parser = new TSParser();
-  parser.setLanguage(lang);
-  const tree = parser.parse(content);
-  if (!tree) { parser.delete(); return null; }
-
-  const signatureOf = (node: any): string => {
-    const full = node.text as string;
-    const braceIdx = full.indexOf("{");
-    const colonIdx = full.indexOf(":");
-    let cut = full.length;
-    if (braceIdx > -1) cut = Math.min(cut, braceIdx);
-    if (langKey === "py" && colonIdx > -1 && colonIdx < cut) cut = colonIdx + 1;
-    return full.slice(0, cut).replace(/\s+/g, " ").trim().slice(0, 140);
-  };
-
-  const symbols: string[] = [];
-  const visit = (node: any, containerDepth: number) => {
-    if (symbols.length >= 25) return;
-    const isContainer = cfg.containerTypes.has(node.type);
-    const isFunction = cfg.functionTypes.has(node.type);
-    if ((isContainer || isFunction) && (!cfg.nodeFilter || cfg.nodeFilter(node))) {
-      const sig = signatureOf(node);
-      if (sig) symbols.push(containerDepth > 0 && isFunction ? `  .${sig}` : sig);
-    }
-    for (let i = 0; i < node.childCount; i++) {
-      visit(node.child(i), containerDepth + (isContainer ? 1 : 0));
-    }
-  };
-  visit(tree.rootNode, 0);
-  parser.delete();
-  return symbols;
-}
-
-// Fallback line-based heuristic for languages without a bundled AST parser.
-const REGEX_FALLBACK_PATTERNS = [
-  /^(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)/,
-  /^(?:pub\s+)?(?:struct|enum|trait|impl)\s+([a-zA-Z0-9_<>]+)/,
-  /^(?:def|class)\s+([a-zA-Z0-9_]+)\s*(?:\(([^)]*)\))?:/,
-  /^func\s+(?:\([^)]*\)\s*)?([a-zA-Z0-9_]+)\s*\(([^)]*)\)/,
-  /^(?:public|private|protected|static)?\s*(?:class|interface)\s+([a-zA-Z0-9_]+)/,
-  /^(?:abstract\s+)?class\s+([a-zA-Z0-9_]+)/,
-  /^(?:Future<[^>]*>|void|int|double|String|bool|dynamic|var)?\s*([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*(?:async\s*)?\{/ // dart-ish
-];
-
-function extractSymbolsViaRegexFallback(content: string): string[] {
-  const symbols: string[] = [];
-  const lines = content.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("/*")) continue;
-    for (const rgx of REGEX_FALLBACK_PATTERNS) {
-      const match = trimmed.match(rgx);
-      if (match) {
-        symbols.push(`[regex] ${trimmed.slice(0, 100)}`);
-        break;
-      }
-    }
-    if (symbols.length >= 12) break;
-  }
-  return symbols;
-}
-
-function buildAstRepoMap(workspace: string, maxFiles = 40): { mapString: string; totalSymbols: number; astParsedFiles: number; treeSitterParsedFiles: number; regexFallbackFiles: number } {
-  const mapLines: string[] = [];
-  let totalSymbols = 0;
-  let astParsedFiles = 0;
-  let treeSitterParsedFiles = 0;
-  let regexFallbackFiles = 0;
-
-  const scanFileSymbols = (filePath: string, ext: string) => {
-    try {
-      const content = readFileSync(filePath, "utf-8");
-      let fileSymbols: string[];
-      let tag: string;
-
-      const treeSitterLangKey = EXT_TO_TREE_SITTER_LANG[ext];
-      const treeSitterSymbols = treeSitterLangKey ? extractSymbolsViaTreeSitter(treeSitterLangKey, content) : null;
-
-      if (AST_PARSEABLE_EXTENSIONS.has(ext)) {
-        fileSymbols = extractSymbolsViaTypeScriptAst(filePath, content, ext).slice(0, 25);
-        tag = "🌳 AST";
-        astParsedFiles++;
-      } else if (treeSitterSymbols !== null) {
-        // Grammatica reale caricata: usiamo il risultato anche se vuoto (file senza
-        // dichiarazioni riconoscibili), non ricadiamo sul regex solo perché è 0.
-        fileSymbols = treeSitterSymbols;
-        tag = "🌳 tree-sitter AST";
-        treeSitterParsedFiles++;
-      } else {
-        fileSymbols = extractSymbolsViaRegexFallback(content);
-        tag = "🔤 regex-fallback";
-        regexFallbackFiles++;
-      }
-
-      if (fileSymbols.length > 0) {
-        const rel = relative(workspace, filePath);
-        mapLines.push(`📄 ${rel}  [${tag}]:\n  ` + fileSymbols.map(s => `• ${s}`).join("\n  "));
-        totalSymbols += fileSymbols.length;
-      }
-    } catch {}
-  };
-
-  let filesScanned = 0;
-  const walk = (dir: string, depth = 0) => {
-    if (depth > 4 || filesScanned >= maxFiles) return;
-    try {
-      const entries = readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (filesScanned >= maxFiles) return;
-        if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist" || entry.name === "build") continue;
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) walk(full, depth + 1);
-        else if (entry.isFile()) {
-          const ext = entry.name.split(".").pop()?.toLowerCase() || "";
-          if (["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "dart", "go", "java", "cpp", "cc", "cxx", "hpp", "c", "h"].includes(ext)) {
-            scanFileSymbols(full, ext);
-            filesScanned++;
-          }
-        }
-      }
-    } catch {}
-  };
-
-  walk(workspace);
-  return {
-    mapString: mapLines.join("\n\n"),
-    totalSymbols,
-    astParsedFiles,
-    treeSitterParsedFiles,
-    regexFallbackFiles
-  };
-}
-
-// ========================================================
-// 🔎 REAL SEMANTIC CODEBASE SEARCH (Cursor/Cline/Continue @codebase style)
-// ------------------------------------------------------
-// Gap reale rispetto ai competitor citati nel README (Aider/Continue/Cursor/
-// Cline): tutti offrono una ricerca "@codebase" che trova i file/funzioni
-// rilevanti per il significato della domanda, non solo per il nome del file
-// (come @file già fa qui) o per parole chiave esatte. Riusa la stessa
-// infrastruttura di embedding reale (Ollama nomic-embed-text + fallback
-// hash deterministico) già costruita per la memoria vettoriale di AgentDB,
-// applicata ora a chunk di codice reali letti dal disco, con un indice
-// persistito e aggiornato in modo incrementale (per mtime, non ricalcola
-// tutto ad ogni richiesta).
-interface CodebaseChunk {
-  file: string;
-  startLine: number;
-  text: string;
-  embedding: number[];
-}
-interface CodebaseIndexEntry {
-  mtimeMs: number;
-  chunks: CodebaseChunk[];
-}
-type CodebaseIndex = Record<string, CodebaseIndexEntry>;
-
-const CODEBASE_INDEX_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "dart", "go", "java", "cpp", "cc", "cxx", "hpp", "c", "h", "md"]);
-const CODEBASE_CHUNK_LINES = 40;
-const CODEBASE_MAX_FILES = 150;
-
-function getCodebaseIndexPath(workspace: string): string {
-  return join(workspace, ".claude", "codebase-index.json");
-}
-
-function loadCodebaseIndex(workspace: string): CodebaseIndex {
-  try {
-    const p = getCodebaseIndexPath(workspace);
-    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf-8"));
-  } catch {}
-  return {};
-}
-
-function saveCodebaseIndex(workspace: string, index: CodebaseIndex) {
-  try {
-    const claudeDir = join(workspace, ".claude");
-    if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
-    writeFileSync(getCodebaseIndexPath(workspace), JSON.stringify(index), "utf-8");
-  } catch (e) {
-    console.error("[codebase-index] impossibile salvare l'indice:", e);
-  }
-}
-
-function chunkFileContent(content: string): { startLine: number; text: string }[] {
-  const lines = content.split("\n");
-  const chunks: { startLine: number; text: string }[] = [];
-  for (let i = 0; i < lines.length; i += CODEBASE_CHUNK_LINES) {
-    const slice = lines.slice(i, i + CODEBASE_CHUNK_LINES).join("\n").trim();
-    if (slice.length > 0) chunks.push({ startLine: i + 1, text: slice });
-  }
-  return chunks;
-}
-
-// Costruisce/aggiorna l'indice reale: riusa gli embedding già calcolati per
-// i file invariati (via mtimeMs), ricalcola solo quelli nuovi o modificati.
-async function buildOrUpdateCodebaseIndex(workspace: string): Promise<CodebaseChunk[]> {
-  const index = loadCodebaseIndex(workspace);
-  const seenFiles = new Set<string>();
-  let mutated = false;
-  let filesScanned = 0;
-
-  const walk = async (dir: string, depth = 0) => {
-    if (depth > 5 || filesScanned >= CODEBASE_MAX_FILES) return;
-    let entries;
-    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      if (filesScanned >= CODEBASE_MAX_FILES) return;
-      if (entry.name.startsWith(".") || ["node_modules", "dist", "build", "__pycache__", "target", "whisper-models"].includes(entry.name)) continue;
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) { await walk(full, depth + 1); continue; }
-      const ext = entry.name.split(".").pop()?.toLowerCase() || "";
-      if (!CODEBASE_INDEX_EXTENSIONS.has(ext)) continue;
-
-      const rel = relative(workspace, full);
-      seenFiles.add(rel);
-      filesScanned++;
-      try {
-        const stat = statSync(full);
-        const existing = index[rel];
-        if (existing && existing.mtimeMs === stat.mtimeMs) continue; // invariato, riusa gli embedding già calcolati
-
-        const content = readFileSync(full, "utf-8");
-        const rawChunks = chunkFileContent(content);
-        const chunks: CodebaseChunk[] = [];
-        for (const c of rawChunks) {
-          const embedding = await generateEmbedding(c.text.slice(0, 2000));
-          chunks.push({ file: rel, startLine: c.startLine, text: c.text.slice(0, 800), embedding });
-        }
-        index[rel] = { mtimeMs: stat.mtimeMs, chunks };
-        mutated = true;
-      } catch {}
-    }
-  };
-  await walk(workspace);
-
-  // Rimuove dall'indice i file cancellati dal disco (evita risultati fantasma)
-  for (const key of Object.keys(index)) {
-    if (!seenFiles.has(key)) { delete index[key]; mutated = true; }
-  }
-
-  if (mutated) saveCodebaseIndex(workspace, index);
-  return Object.values(index).flatMap(e => e.chunks);
-}
-
-async function semanticCodebaseSearch(workspace: string, query: string, topK = 5): Promise<{ file: string; startLine: number; text: string; score: number }[]> {
-  const allChunks = await buildOrUpdateCodebaseIndex(workspace);
-  if (allChunks.length === 0) return [];
-  const queryVec = await generateEmbedding(query);
-  return allChunks
-    .map(c => ({ file: c.file, startLine: c.startLine, text: c.text, score: cosineSimilarity(queryVec, c.embedding) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
-}
-
-// ========================================================
-// 🎯 CONTINUE.DEV-STYLE CONTEXT MENTIONS RESOLVER (@file, @git, @diff)
-// ========================================================
-async function resolveContextMentions(prompt: string, workspace: string): Promise<{ cleanPrompt: string; injectedContext: string }> {
-  let cleanPrompt = prompt;
-  const injectedParts: string[] = [];
-
-  // 1. Resolve @file:<path> or @file <path>
-  const fileMatches = [...prompt.matchAll(/@file:?([a-zA-Z0-9_\-./]+)/g)];
-  for (const m of fileMatches) {
-    const filePath = m[1];
-    const absPath = resolve(workspace, filePath);
-    if (existsSync(absPath)) {
-      try {
-        const content = readFileSync(absPath, "utf-8").slice(0, 5000);
-        injectedParts.push(`\n--- 📄 CONTENUTO ALLEGATO DA @file (${filePath}) ---\n${content}\n-----------------------------------------------\n`);
-        cleanPrompt = cleanPrompt.replace(m[0], `[File: ${filePath}]`);
-      } catch {}
-    }
-  }
-
-  // 2. Resolve @git or @diff
-  if (/@(git|diff)\b/i.test(prompt)) {
-    const git = getGitStatus(workspace);
-    if (git.isGit && git.diffSummary) {
-      injectedParts.push(`\n--- 🌿 STATO E DIFF GIT ALLEGATI DA @git ---\nBranch: ${git.branch}\nModifiche:\n${git.diffSummary}\n------------------------------------------\n`);
-      cleanPrompt = cleanPrompt.replace(/@(git|diff)\b/gi, "[Git Diff allegato]");
-    }
-  }
-
-  // 3. Resolve @codebase(<query>) — real semantic search (embedding + cosine)
-  // across the real files on disk, not just filename matching like @file.
-  const codebaseMatches = [...prompt.matchAll(/@codebase\(([^)]+)\)/gi)];
-  for (const m of codebaseMatches) {
-    const query = m[1].trim();
-    if (!query) continue;
-    try {
-      const results = await semanticCodebaseSearch(workspace, query, 5);
-      if (results.length > 0) {
-        const body = results.map(r => `📄 ${r.file}:${r.startLine} (similarità coseno reale: ${r.score.toFixed(3)})\n${r.text}`).join("\n\n");
-        injectedParts.push(`\n--- 🔎 RICERCA SEMANTICA REALE @codebase("${query}") ---\n${body}\n------------------------------------------------------\n`);
-      } else {
-        injectedParts.push(`\n--- 🔎 @codebase("${query}"): nessun file indicizzabile trovato nel workspace ---\n`);
-      }
-      cleanPrompt = cleanPrompt.replace(m[0], `[Ricerca semantica codebase: "${query}"]`);
-    } catch (e: any) {
-      injectedParts.push(`\n--- 🔎 @codebase("${query}") fallita: ${e.message} ---\n`);
-    }
-  }
-
-  return {
-    cleanPrompt,
-    injectedContext: injectedParts.join("\n")
-  };
-}
 
 // Cross-Platform Native Folder Picker Runner
 async function pickFolderNative(): Promise<string> {
@@ -1615,14 +881,10 @@ const server = Bun.serve({
           return new Response(JSON.stringify({ error: "File non trovato" }), { status: 404, headers });
         }
         try {
-          const stat = statSync(filePath);
-          if (stat.size > 2 * 1024 * 1024) {
-            return new Response(JSON.stringify({ error: "File troppo grande (>2MB)" }), { status: 400, headers });
-          }
-          const content = readFileSync(filePath, "utf-8");
-          return new Response(JSON.stringify({ name: basename(filePath), path: filePath, content }), { headers });
+          return new Response(JSON.stringify(readWorkspaceFile(filePath)), { headers });
         } catch (e: any) {
-          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+          const status = e instanceof FileTooLargeError ? 400 : 500;
+          return new Response(JSON.stringify({ error: e.message }), { status, headers });
         }
       }
 
@@ -1634,48 +896,14 @@ const server = Bun.serve({
       if (url.pathname === "/api/workspace/file/diff-preview" && req.method === "POST") {
         try {
           const body: any = await req.json();
-          const filePath = resolve(body.filePath || "");
-          const newContent: string = body.newContent ?? "";
-
-          if (!filePath) {
+          if (!body.filePath) {
             return new Response(JSON.stringify({ error: "filePath obbligatorio" }), { status: 400, headers });
           }
-          const workspaceRoot = resolve(body.workspace || attachedWorkspacePath);
-          const relToWorkspace = relative(workspaceRoot, filePath);
-          if (relToWorkspace.startsWith("..") || resolve(workspaceRoot, relToWorkspace) !== filePath) {
-            return new Response(JSON.stringify({ error: "Il file deve trovarsi dentro il workspace attaccato" }), { status: 403, headers });
-          }
-
-          const fileExists = existsSync(filePath);
-          const oldContent = fileExists ? readFileSync(filePath, "utf-8") : "";
-
-          const unifiedDiff = Diff.createTwoFilesPatch(
-            fileExists ? relative(workspaceRoot, filePath) : "/dev/null",
-            relative(workspaceRoot, filePath),
-            oldContent,
-            newContent,
-            fileExists ? "current" : "new file",
-            "proposed"
-          );
-
-          const lineChanges = Diff.diffLines(oldContent, newContent);
-          let added = 0, removed = 0;
-          for (const part of lineChanges) {
-            const n = part.value.split("\n").length - 1;
-            if (part.added) added += n;
-            else if (part.removed) removed += n;
-          }
-
-          return new Response(JSON.stringify({
-            filePath,
-            fileExists,
-            unifiedDiff,
-            linesAdded: added,
-            linesRemoved: removed,
-            identical: oldContent === newContent
-          }), { headers });
+          const result = computeDiffPreview(body.filePath, body.workspace || attachedWorkspacePath, body.newContent ?? "");
+          return new Response(JSON.stringify(result), { headers });
         } catch (e: any) {
-          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+          const status = e instanceof WorkspaceBoundaryError ? 403 : 500;
+          return new Response(JSON.stringify({ error: e.message }), { status, headers });
         }
       }
 
@@ -1686,52 +914,25 @@ const server = Bun.serve({
       if (url.pathname === "/api/workspace/file/diff-apply" && req.method === "POST") {
         try {
           const body: any = await req.json();
-          const filePath = resolve(body.filePath || "");
-          const newContent: string = body.newContent ?? "";
-          const expectedOldContent: string | undefined = body.expectedOldContent;
-
-          if (!filePath) {
+          if (!body.filePath) {
             return new Response(JSON.stringify({ error: "filePath obbligatorio" }), { status: 400, headers });
           }
-          const workspaceRoot = resolve(body.workspace || attachedWorkspacePath);
-          const relToWorkspace = relative(workspaceRoot, filePath);
-          if (relToWorkspace.startsWith("..") || resolve(workspaceRoot, relToWorkspace) !== filePath) {
-            return new Response(JSON.stringify({ error: "Il file deve trovarsi dentro il workspace attaccato" }), { status: 403, headers });
-          }
-
-          const fileExists = existsSync(filePath);
-          const currentContent = fileExists ? readFileSync(filePath, "utf-8") : "";
-
-          if (typeof expectedOldContent === "string" && expectedOldContent !== currentContent) {
-            return new Response(JSON.stringify({
-              error: "Conflitto: il file è cambiato su disco dopo la preview. Rigenera la diff prima di applicare.",
-              conflict: true
-            }), { status: 409, headers });
-          }
-
-          // Ensure parent directory exists for genuinely new files.
-          const parentDir = dirname(filePath);
-          if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
-
-          writeFileSync(filePath, newContent, "utf-8");
+          const newContent: string = body.newContent ?? "";
+          const result = applyFileDiff(body.filePath, body.workspace || attachedWorkspacePath, newContent, body.expectedOldContent);
 
           await saveProjectInsight(
-            workspaceRoot,
-            `diff-apply:${relative(workspaceRoot, filePath)}`.slice(0, 40),
-            `Applicata modifica reale via diff-apply su ${relative(workspaceRoot, filePath)} (${new Date().toLocaleString()})`,
+            result.workspaceRoot,
+            `diff-apply:${relative(result.workspaceRoot, result.filePath)}`.slice(0, 40),
+            `Applicata modifica reale via diff-apply su ${relative(result.workspaceRoot, result.filePath)} (${new Date().toLocaleString()})`,
             ["diff-apply", "edit"]
           );
 
-          server.publish("claude-studio", JSON.stringify({ type: "file_diff_applied", filePath, bytesWritten: newContent.length }));
+          server.publish("claude-studio", JSON.stringify({ type: "file_diff_applied", filePath: result.filePath, bytesWritten: newContent.length }));
 
-          return new Response(JSON.stringify({
-            success: true,
-            filePath,
-            bytesWritten: Buffer.byteLength(newContent, "utf-8"),
-            wasNewFile: !fileExists
-          }), { headers });
+          return new Response(JSON.stringify({ success: true, ...result }), { headers });
         } catch (e: any) {
-          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+          const status = e instanceof WorkspaceBoundaryError ? 403 : e instanceof DiffConflictError ? 409 : 500;
+          return new Response(JSON.stringify({ error: e.message, conflict: e instanceof DiffConflictError }), { status, headers });
         }
       }
 
@@ -1739,11 +940,7 @@ const server = Bun.serve({
       if (url.pathname === "/api/workspace/rules/save" && req.method === "POST") {
         try {
           const body: any = await req.json();
-          const targetFile = body.fileName || ".cursorrules";
-          const content = body.content || "";
-          const filePath = join(attachedWorkspacePath, targetFile);
-
-          writeFileSync(filePath, content, "utf-8");
+          const filePath = saveProjectRules(attachedWorkspacePath, body.fileName, body.content || "");
           const context = analyzeProjectContext(attachedWorkspacePath);
           server.publish("claude-studio", JSON.stringify({ type: "rules_updated", context }));
 
@@ -2178,11 +1375,11 @@ const server = Bun.serve({
         else if (activeModel.startsWith("gemini")) speed = "~120 tok/s (Google Flash)";
         else if (activeModel.startsWith("openrouter/")) speed = "50 tok/s";
 
-        const estimatedSavings = ((totalTokensProcessed / 1000000) * 9.0).toFixed(2);
+        const estimatedSavings = ((getTokensProcessed() / 1000000) * 9.0).toFixed(2);
 
         return new Response(
           JSON.stringify({
-            totalTokens: totalTokensProcessed,
+            totalTokens: getTokensProcessed(),
             tokensPerSec: speed,
             activeModel,
             savingsUsd: estimatedSavings,
@@ -2505,7 +1702,7 @@ Fornisci risposte complete, codice pulito e pronto all'uso, spiegazioni chiare e
                         if (data.type === "content_block_delta" && data.delta?.text) {
                           const chunk = data.delta.text;
                           fullPhaseText += chunk;
-                          totalTokensProcessed += 1;
+                          addTokensProcessed(1);
                           await writer.write(encoder.encode(chunk));
                           server.publish("claude-studio", JSON.stringify({ type: "agent_output", data: chunk }));
                         }
@@ -2596,7 +1793,7 @@ Fornisci risposte complete, codice pulito e pronto all'uso, spiegazioni chiare e
                       const data = JSON.parse(jsonStr);
                       if (data.type === "content_block_delta" && data.delta?.text) {
                         const textChunk = data.delta.text;
-                        totalTokensProcessed += 1;
+                        addTokensProcessed(1);
                         await writer.write(encoder.encode(textChunk));
                         server.publish("claude-studio", JSON.stringify({ type: "agent_output", data: textChunk }));
                       }
@@ -3525,7 +2722,7 @@ async function handleAnthropicProxy(req: Request) {
     if (!isStream) {
       const data: any = await ollamaRes.json();
       const text = data.message?.content || "";
-      totalTokensProcessed += Math.round(text.length / 3.5);
+      addTokensProcessed(Math.round(text.length / 3.5));
 
       const anthropicResponse = {
         id: `msg_${Date.now()}`,
@@ -3552,270 +2749,6 @@ async function handleAnthropicProxy(req: Request) {
       headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
     });
   }
-}
-
-function authErrorResponse(message: string) {
-  return new Response(
-    JSON.stringify({
-      error: {
-        type: "authentication_error",
-        message
-      }
-    }),
-    { status: 401, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }
-  );
-}
-
-/**
- * Handles OpenAI-compatible streams
- */
-async function handleOpenAICompatibleStream(endpoint: string, apiKey: string, modelId: string, anthropicBody: any) {
-  const openaiMessages: any[] = [];
-
-  if (anthropicBody.system) {
-    const sysText = Array.isArray(anthropicBody.system)
-      ? anthropicBody.system.map((s: any) => s.text || "").join("\n")
-      : anthropicBody.system;
-    openaiMessages.push({ role: "system", content: sysText });
-  }
-
-  if (anthropicBody.messages) {
-    for (const msg of anthropicBody.messages) {
-      let content = "";
-      if (typeof msg.content === "string") {
-        content = msg.content;
-      } else if (Array.isArray(msg.content)) {
-        content = msg.content
-          .map((c: any) => (c.type === "text" ? c.text : JSON.stringify(c)))
-          .join("\n");
-      }
-      openaiMessages.push({ role: msg.role, content });
-    }
-  }
-
-  const openaiPayload: any = {
-    model: modelId,
-    messages: openaiMessages,
-    temperature: anthropicBody.temperature || 0.7,
-    stream: true
-  };
-
-  if (anthropicBody.tools && Array.isArray(anthropicBody.tools)) {
-    openaiPayload.tools = anthropicBody.tools.map((t: any) => ({
-      type: "function",
-      function: {
-        name: t.name,
-        description: t.description || "",
-        parameters: t.input_schema || {}
-      }
-    }));
-  }
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-      "HTTP-Referer": "http://localhost:3001",
-      "X-Title": "Custom Claude Coder"
-    },
-    body: JSON.stringify(openaiPayload)
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    return new Response(JSON.stringify({ error: errText }), {
-      status: res.status,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-    });
-  }
-
-  return transformSSEToAnthropic(res, (json) => {
-    return json.choices?.[0]?.delta?.content || "";
-  }, modelId);
-}
-
-/**
- * SSE to Anthropic SSE transformer
- */
-function transformSSEToAnthropic(upstreamRes: Response, extractTextFn: (json: any) => string, modelName: string) {
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
-  const msgId = `msg_${Date.now()}`;
-
-  (async () => {
-    if (!upstreamRes.body) return;
-    const reader = upstreamRes.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    await writer.write(
-      encoder.encode(
-        `event: message_start\ndata: ${JSON.stringify({
-          type: "message_start",
-          message: {
-            id: msgId,
-            type: "message",
-            role: "assistant",
-            content: [],
-            model: modelName,
-            usage: { input_tokens: 100, output_tokens: 0 }
-          }
-        })}\n\n`
-      )
-    );
-
-    await writer.write(
-      encoder.encode(
-        `event: content_block_start\ndata: ${JSON.stringify({
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "" }
-        })}\n\n`
-      )
-    );
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const jsonStr = line.slice(6).trim();
-        if (!jsonStr || jsonStr === "[DONE]") continue;
-
-        try {
-          const json = JSON.parse(jsonStr);
-          const textChunk = extractTextFn(json);
-          if (textChunk) {
-            totalTokensProcessed += 1;
-            await writer.write(
-              encoder.encode(
-                `event: content_block_delta\ndata: ${JSON.stringify({
-                  type: "content_block_delta",
-                  index: 0,
-                  delta: { type: "text_delta", text: textChunk }
-                })}\n\n`
-              )
-            );
-          }
-        } catch {}
-      }
-    }
-
-    await writer.write(encoder.encode(`event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n`));
-    await writer.write(
-      encoder.encode(
-        `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":50}}\n\n`
-      )
-    );
-    await writer.write(encoder.encode(`event: message_stop\ndata: {"type":"message_stop"}\n\n`));
-    await writer.close();
-  })();
-
-  return new Response(readable, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-      "Access-Control-Allow-Origin": "*"
-    }
-  });
-}
-
-/**
- * NDJSON to Anthropic SSE transformer (for Ollama)
- */
-function transformNDJSONToAnthropic(ollamaRes: Response, modelName: string) {
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
-  const msgId = `msg_${Date.now()}`;
-
-  (async () => {
-    if (!ollamaRes.body) return;
-    const reader = ollamaRes.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    await writer.write(
-      encoder.encode(
-        `event: message_start\ndata: ${JSON.stringify({
-          type: "message_start",
-          message: {
-            id: msgId,
-            type: "message",
-            role: "assistant",
-            content: [],
-            model: modelName,
-            usage: { input_tokens: 100, output_tokens: 0 }
-          }
-        })}\n\n`
-      )
-    );
-
-    await writer.write(
-      encoder.encode(
-        `event: content_block_start\ndata: ${JSON.stringify({
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "" }
-        })}\n\n`
-      )
-    );
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const chunk = JSON.parse(line);
-          const deltaText = chunk.message?.content || "";
-          if (deltaText) {
-            totalTokensProcessed += 1;
-            await writer.write(
-              encoder.encode(
-                `event: content_block_delta\ndata: ${JSON.stringify({
-                  type: "content_block_delta",
-                  index: 0,
-                  delta: { type: "text_delta", text: deltaText }
-                })}\n\n`
-              )
-            );
-          }
-        } catch {}
-      }
-    }
-
-    await writer.write(encoder.encode(`event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n`));
-    await writer.write(
-      encoder.encode(
-        `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":50}}\n\n`
-      )
-    );
-    await writer.write(encoder.encode(`event: message_stop\ndata: {"type":"message_stop"}\n\n`));
-    await writer.close();
-  })();
-
-  return new Response(readable, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-      "Access-Control-Allow-Origin": "*"
-    }
-  });
 }
 
 console.log(`\n======================================================`);
