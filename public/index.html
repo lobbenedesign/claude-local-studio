@@ -384,6 +384,35 @@
           </div>
         </div>
 
+        <!-- 0. HUGGING FACE HUB (RICERCA + PULL GGUF LOCALE) -->
+        <div class="models-section">
+          <div class="section-category-header">
+            <span class="category-icon">🤗</span>
+            <div>
+              <h3 class="subsection-title">Hugging Face Hub — Ricerca modelli GGUF</h3>
+              <p class="category-sub">Cerca tra migliaia di modelli GGUF reali su Hugging Face e scaricali in locale via Ollama (<code>hf.co/repo:QUANT</code>).</p>
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <input type="text" id="hf-search-input" placeholder="es. qwen2.5-coder, llama-3.2, deepseek..." class="form-control" style="flex: 1;">
+            <button class="btn btn-primary" id="btn-hf-search">Cerca</button>
+          </div>
+          <div class="models-grid" id="hf-search-results-grid"></div>
+        </div>
+
+        <!-- 0b. HUGGING FACE ROUTER (PROVIDER CLOUD) -->
+        <div class="models-section">
+          <div class="section-category-header">
+            <span class="category-icon">🤗</span>
+            <div>
+              <h3 class="subsection-title">Hugging Face Inference Providers (Router Cloud)</h3>
+              <p class="category-sub">Accesso a migliaia di modelli tramite provider partner (Together, Novita, Fireworks...) con un solo token HF.</p>
+            </div>
+            <span class="badge badge-tag" id="badge-hf-status">API Key: Non impostata</span>
+          </div>
+          <div class="models-grid" id="hf-router-models-grid"></div>
+        </div>
+
         <!-- 1. CEREBRAS CLOUD (RECORD SPEED ~1800 TOK/S) -->
         <div class="models-section">
           <div class="section-category-header">
@@ -586,6 +615,18 @@
             <p class="form-help" style="margin-bottom: 12px;">Sblocca Llama 3.3 70B alla velocità record mondiale di <strong>~1.800 token/sec</strong>.</p>
             <div class="form-group">
               <input type="password" id="input-cerebras-key" placeholder="csk-..." class="form-control">
+            </div>
+          </div>
+
+          <!-- 1b. Hugging Face Token -->
+          <div class="card">
+            <div class="card-header-row">
+              <h3 class="card-title">🤗 Hugging Face Token</h3>
+              <a href="https://huggingface.co/settings/tokens" target="_blank" class="link-external">Ottieni Gratis ↗</a>
+            </div>
+            <p class="form-help" style="margin-bottom: 12px;">Sblocca il Router Inference Providers (migliaia di modelli) e alza i rate-limit di ricerca sull'Hub.</p>
+            <div class="form-group">
+              <input type="password" id="input-hf-key" placeholder="hf_..." class="form-control">
             </div>
           </div>
 

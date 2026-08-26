@@ -5,6 +5,7 @@ let apiKeysStatus = {
   hasGroqKey: false,
   hasOpenRouterKey: false,
   hasCerebrasKey: false,
+  hasHFKey: false,
   hasSambaNovaKey: false,
   hasMistralKey: false
 };
@@ -12,6 +13,7 @@ let apiKeysStatus = {
 let localModels = [];
 let featuredLocalModels = [];
 let cerebrasModels = [];
+let hfRouterModels = [];
 let sambanovaModels = [];
 let mistralModels = [];
 let groqModels = [];
@@ -27,6 +29,10 @@ let attachedWorkspacePath = "/Users/giuseppelobbene/Desktop/APP PYTHON - FLUTTER
 const quickModelSelect = document.getElementById("quick-model-select");
 const localModelsGrid = document.getElementById("local-models-grid");
 const cerebrasModelsGrid = document.getElementById("cerebras-models-grid");
+const hfRouterModelsGrid = document.getElementById("hf-router-models-grid");
+const hfSearchResultsGrid = document.getElementById("hf-search-results-grid");
+const hfSearchInput = document.getElementById("hf-search-input");
+const btnHfSearch = document.getElementById("btn-hf-search");
 const sambanovaModelsGrid = document.getElementById("sambanova-models-grid");
 const mistralModelsGrid = document.getElementById("mistral-models-grid");
 const groqModelsGrid = document.getElementById("groq-models-grid");
@@ -48,6 +54,7 @@ const customModelInput = document.getElementById("custom-model-input");
 
 // Key Badges
 const badgeCerebrasStatus = document.getElementById("badge-cerebras-status");
+const badgeHfStatus = document.getElementById("badge-hf-status");
 const badgeSambanovaStatus = document.getElementById("badge-sambanova-status");
 const badgeMistralStatus = document.getElementById("badge-mistral-status");
 const badgeGroqStatus = document.getElementById("badge-groq-status");
@@ -57,6 +64,7 @@ const badgeOpenaiStatus = document.getElementById("badge-openai-status");
 
 // Key Inputs
 const inputCerebrasKey = document.getElementById("input-cerebras-key");
+const inputHfKey = document.getElementById("input-hf-key");
 const inputSambanovaKey = document.getElementById("input-sambanova-key");
 const inputMistralKey = document.getElementById("input-mistral-key");
 const inputGroqKey = document.getElementById("input-groq-key");
@@ -1060,6 +1068,7 @@ async function fetchModels() {
     localModels = data.localModels || [];
     featuredLocalModels = data.featuredLocalModels || [];
     cerebrasModels = data.cerebrasModels || [];
+    hfRouterModels = data.hfRouterModels || [];
     sambanovaModels = data.sambanovaModels || [];
     mistralModels = data.mistralModels || [];
     groqModels = data.groqModels || [];
@@ -1070,6 +1079,7 @@ async function fetchModels() {
     // Pre-populate Persistent Saved Keys in Form
     if (data.savedKeys) {
       if (inputCerebrasKey && data.savedKeys.cerebrasKey) inputCerebrasKey.value = data.savedKeys.cerebrasKey;
+      if (inputHfKey && data.savedKeys.hfKey) inputHfKey.value = data.savedKeys.hfKey;
       if (inputSambanovaKey && data.savedKeys.sambanovaKey) inputSambanovaKey.value = data.savedKeys.sambanovaKey;
       if (inputMistralKey && data.savedKeys.mistralKey) inputMistralKey.value = data.savedKeys.mistralKey;
       if (inputGroqKey && data.savedKeys.groqKey) inputGroqKey.value = data.savedKeys.groqKey;
@@ -1093,6 +1103,7 @@ async function fetchModels() {
     renderModelDropdown();
     renderLocalModels();
     renderCerebrasModels();
+    renderHfRouterModels();
     renderSambaNovaModels();
     renderMistralModels();
     renderGroqModels();
@@ -1115,6 +1126,7 @@ function updateKeyBadges() {
   };
 
   setBadge(badgeCerebrasStatus, apiKeysStatus.hasCerebrasKey, "Cerebras");
+  setBadge(badgeHfStatus, apiKeysStatus.hasHFKey, "Hugging Face");
   setBadge(badgeSambanovaStatus, apiKeysStatus.hasSambaNovaKey, "SambaNova");
   setBadge(badgeMistralStatus, apiKeysStatus.hasMistralKey, "Mistral");
   setBadge(badgeGroqStatus, apiKeysStatus.hasGroqKey, "Groq");
@@ -1144,6 +1156,7 @@ function renderModelDropdown() {
   addGroup("⚡ Modelli Locali (Ollama)", localModels, m => m.name);
   addGroup("🤖 OpenAI (ChatGPT)", openaiModels, m => m.displayName);
   addGroup("⚡ Cerebras Cloud (Record ~1800 tok/s)", cerebrasModels, m => `${m.displayName} (~1800 tok/s)`);
+  addGroup("🤗 Hugging Face Router", hfRouterModels, m => m.displayName);
   addGroup("🧠 SambaNova Cloud (671B MoE Free)", sambanovaModels, m => `${m.displayName}`);
   addGroup("🎯 Mistral AI (Codestral 256k)", mistralModels, m => `${m.displayName}`);
   addGroup("🚀 Groq Cloud (Free Tier ~400 tok/s)", groqModels, m => `${m.displayName} (~400 tok/s)`);
@@ -1226,6 +1239,88 @@ function renderCerebrasModels() {
   cerebrasModels.forEach(m => cerebrasModelsGrid.appendChild(createModelCard(m, m.cost)));
 }
 
+function renderHfRouterModels() {
+  if (!hfRouterModelsGrid) return;
+  hfRouterModelsGrid.innerHTML = "";
+  hfRouterModels.forEach(m => hfRouterModelsGrid.appendChild(createModelCard(m, m.cost)));
+}
+
+// Real search against Hugging Face's own API (huggingface.co/api/models),
+// not a curated list — see server.ts's /api/models/huggingface/search.
+async function searchHuggingFace() {
+  if (!hfSearchInput || !hfSearchResultsGrid) return;
+  const query = hfSearchInput.value.trim();
+  hfSearchResultsGrid.innerHTML = `<p class="card-model-desc">Ricerca in corso su Hugging Face Hub...</p>`;
+  try {
+    const res = await fetch(`/api/models/huggingface/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+    if (data.error) {
+      hfSearchResultsGrid.innerHTML = `<p class="card-model-desc">Errore: ${data.error}</p>`;
+      return;
+    }
+    hfSearchResultsGrid.innerHTML = "";
+    (data.results || []).forEach(m => hfSearchResultsGrid.appendChild(createHfResultCard(m)));
+    if ((data.results || []).length === 0) {
+      hfSearchResultsGrid.innerHTML = `<p class="card-model-desc">Nessun modello GGUF trovato per "${query}".</p>`;
+    }
+  } catch (err) {
+    hfSearchResultsGrid.innerHTML = `<p class="card-model-desc">Errore di rete: ${err.message}</p>`;
+  }
+}
+
+function createHfResultCard(m) {
+  const domId = `hf-files-${m.id.replace(/[^a-zA-Z0-9]/g, "-")}`;
+  const card = document.createElement("div");
+  card.className = "model-card";
+  card.innerHTML = `
+    <div>
+      <div class="card-header-row">
+        <div>
+          <div class="card-model-title">${m.id}</div>
+          <div class="card-model-author">${m.author}</div>
+        </div>
+        <span class="badge badge-tag">⬇ ${m.downloads.toLocaleString()}</span>
+      </div>
+      <div class="card-badges-row" style="margin-top: 8px;">
+        <span class="pill-meta">❤ ${m.likes}</span>
+      </div>
+      <div id="${domId}" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px;"></div>
+    </div>
+    <div style="margin-top: 14px;">
+      <button class="btn btn-secondary" style="width: 100%;" onclick="showHfFiles('${m.id}', '${domId}')">Vedi quantizzazioni GGUF</button>
+    </div>
+  `;
+  return card;
+}
+
+// Lists the repo's real GGUF files (server-side, sharded files already
+// excluded) and turns each quantization into a one-click pull that reuses
+// the existing pullModel() — same progress bar, same /api/models/pull.
+async function showHfFiles(repoId, containerDomId) {
+  const container = document.getElementById(containerDomId);
+  if (!container) return;
+  container.innerHTML = `<span class="pill-meta">Caricamento quantizzazioni...</span>`;
+  try {
+    const res = await fetch(`/api/models/huggingface/files?repo=${encodeURIComponent(repoId)}`);
+    const data = await res.json();
+    if (data.error || !data.files || data.files.length === 0) {
+      container.innerHTML = `<span class="pill-meta">Nessun file GGUF a file singolo trovato.</span>`;
+      return;
+    }
+    container.innerHTML = "";
+    data.files.forEach(f => {
+      const btn = document.createElement("button");
+      btn.className = "btn btn-primary btn-sm";
+      btn.textContent = f.quantTag;
+      btn.title = f.filename;
+      btn.onclick = () => pullModel(`hf.co/${repoId}:${f.quantTag}`);
+      container.appendChild(btn);
+    });
+  } catch (err) {
+    container.innerHTML = `<span class="pill-meta">Errore: ${err.message}</span>`;
+  }
+}
+
 function renderSambaNovaModels() {
   sambanovaModelsGrid.innerHTML = "";
   sambanovaModels.forEach(m => sambanovaModelsGrid.appendChild(createModelCard(m, m.cost)));
@@ -1274,6 +1369,7 @@ async function setActiveModel(name) {
       updateActiveModelUI();
       renderLocalModels();
       renderCerebrasModels();
+      renderHfRouterModels();
       renderSambaNovaModels();
       renderMistralModels();
       renderGroqModels();
@@ -1296,6 +1392,7 @@ function updateActiveModelUI() {
   if (chipActiveProvider) {
     if (activeModel.startsWith("openai/") || activeModel.startsWith("gpt-") || activeModel.startsWith("o1") || activeModel.startsWith("o3")) chipActiveProvider.textContent = "🤖 OpenAI ChatGPT";
     else if (activeModel.startsWith("cerebras/")) chipActiveProvider.textContent = "⚡ Cerebras (~1800 tok/s)";
+    else if (activeModel.startsWith("hf/")) chipActiveProvider.textContent = "🤗 Hugging Face Router";
     else if (activeModel.startsWith("sambanova/")) chipActiveProvider.textContent = "🧠 SambaNova (671B)";
     else if (activeModel.startsWith("mistral/")) chipActiveProvider.textContent = "🎯 Mistral Codestral";
     else if (activeModel.startsWith("groq/")) chipActiveProvider.textContent = "🚀 Groq Cloud (~400 tok/s)";
@@ -1387,6 +1484,7 @@ async function deleteModel(name) {
 async function saveAllApiKeys() {
   const payload = {
     cerebrasKey: inputCerebrasKey ? inputCerebrasKey.value.trim() : "",
+    hfKey: inputHfKey ? inputHfKey.value.trim() : "",
     sambanovaKey: inputSambanovaKey ? inputSambanovaKey.value.trim() : "",
     mistralKey: inputMistralKey ? inputMistralKey.value.trim() : "",
     groqKey: inputGroqKey ? inputGroqKey.value.trim() : "",
@@ -1709,6 +1807,9 @@ function initEventListeners() {
       customModelInput.value = "";
     }
   });
+
+  if (btnHfSearch) btnHfSearch.addEventListener("click", searchHuggingFace);
+  if (hfSearchInput) hfSearchInput.addEventListener("keydown", (e) => { if (e.key === "Enter") searchHuggingFace(); });
 
   if (btnSaveAllKeys) {
     btnSaveAllKeys.addEventListener("click", saveAllApiKeys);

@@ -20,6 +20,7 @@ interface AppConfig {
   groqApiKey: string;
   openrouterApiKey: string;
   cerebrasApiKey: string;
+  hfApiKey: string;
   sambanovaApiKey: string;
   mistralApiKey: string;
   openaiApiKey: string;
@@ -50,6 +51,7 @@ function loadConfig(): AppConfig {
     groqApiKey: process.env.GROQ_API_KEY || "",
     openrouterApiKey: process.env.OPENROUTER_API_KEY || "",
     cerebrasApiKey: process.env.CEREBRAS_API_KEY || "",
+    hfApiKey: process.env.HF_TOKEN || process.env.HUGGINGFACE_API_KEY || "",
     sambanovaApiKey: process.env.SAMBANOVA_API_KEY || "",
     mistralApiKey: process.env.MISTRAL_API_KEY || "",
     openaiApiKey: process.env.OPENAI_API_KEY || "",
@@ -107,6 +109,7 @@ let geminiApiKey = initialConfig.geminiApiKey;
 let groqApiKey = initialConfig.groqApiKey;
 let openrouterApiKey = initialConfig.openrouterApiKey;
 let cerebrasApiKey = initialConfig.cerebrasApiKey;
+let hfApiKey = initialConfig.hfApiKey || "";
 let sambanovaApiKey = initialConfig.sambanovaApiKey;
 let mistralApiKey = initialConfig.mistralApiKey;
 let openaiApiKey = initialConfig.openaiApiKey;
@@ -543,6 +546,53 @@ const CEREBRAS_FREE_MODELS = [
     cost: "Free Developer Tier",
     desc: "Gemma 4 31B servito su hardware wafer-scale Cerebras.",
     tag: "⚡ Cerebras"
+  }
+];
+
+// Catalogo minimo: il router HF dà accesso a migliaia di modelli tramite
+// provider partner (Together, Novita, Fireworks, ecc.) — questi sono solo
+// alcuni punti di partenza noti, non un elenco esaustivo. Il formato
+// "repo:provider" (o ":auto" per selezione automatica) è quello richiesto
+// da https://router.huggingface.co/v1/chat/completions.
+const HF_ROUTER_MODELS = [
+  {
+    name: "hf/deepseek-ai/DeepSeek-V3.1:auto",
+    modelId: "deepseek-ai/DeepSeek-V3.1:auto",
+    displayName: "DeepSeek V3.1 (HF Router, auto)",
+    author: "DeepSeek AI",
+    provider: "huggingface",
+    size: "Cloud API",
+    context: "128k Context",
+    speed: "Varia per provider",
+    cost: "Free/Pay-per-use (credito HF incluso)",
+    desc: "Instradato automaticamente al miglior provider disponibile su Hugging Face Inference Providers.",
+    tag: "🤗 HF Router"
+  },
+  {
+    name: "hf/openai/gpt-oss-120b:auto",
+    modelId: "openai/gpt-oss-120b:auto",
+    displayName: "GPT-OSS 120B (HF Router, auto)",
+    author: "OpenAI OSS",
+    provider: "huggingface",
+    size: "Cloud API",
+    context: "128k Context",
+    speed: "Varia per provider",
+    cost: "Free/Pay-per-use (credito HF incluso)",
+    desc: "Modello open-weight OpenAI instradato tramite Hugging Face Inference Providers.",
+    tag: "🤗 HF Router"
+  },
+  {
+    name: "hf/Qwen/Qwen2.5-Coder-32B-Instruct:auto",
+    modelId: "Qwen/Qwen2.5-Coder-32B-Instruct:auto",
+    displayName: "Qwen 2.5 Coder 32B (HF Router, auto)",
+    author: "Alibaba Cloud",
+    provider: "huggingface",
+    size: "Cloud API",
+    context: "32k Context",
+    speed: "Varia per provider",
+    cost: "Free/Pay-per-use (credito HF incluso)",
+    desc: "Modello di coding instradato tramite Hugging Face Inference Providers.",
+    tag: "🤗 HF Router"
   }
 ];
 
@@ -2225,6 +2275,7 @@ const server = Bun.serve({
                 hasGroqKey: !!groqApiKey,
                 hasOpenRouterKey: !!openrouterApiKey,
                 hasCerebrasKey: !!cerebrasApiKey,
+                hasHFKey: !!hfApiKey,
                 hasSambaNovaKey: !!sambanovaApiKey,
                 hasMistralKey: !!mistralApiKey,
                 hasOpenAIKey: !!openaiApiKey,
@@ -2243,6 +2294,7 @@ const server = Bun.serve({
                 groqKey: groqApiKey,
                 openrouterKey: openrouterApiKey,
                 cerebrasKey: cerebrasApiKey,
+                hfKey: hfApiKey,
                 sambanovaKey: sambanovaApiKey,
                 mistralKey: mistralApiKey,
                 openaiKey: openaiApiKey,
@@ -2265,6 +2317,7 @@ const server = Bun.serve({
               openaiModels: OPENAI_MODELS,
               groqModels: GROQ_FREE_MODELS,
               cerebrasModels: cerebrasModelsLive ?? CEREBRAS_FREE_MODELS,
+              hfRouterModels: HF_ROUTER_MODELS,
               sambanovaModels: SAMBANOVA_FREE_MODELS,
               mistralModels: MISTRAL_FREE_MODELS,
               openrouterModels: OPENROUTER_FREE_MODELS,
@@ -2307,6 +2360,7 @@ const server = Bun.serve({
           if (body.groqKey !== undefined) { groqApiKey = body.groqKey.trim(); updateObj.groqApiKey = groqApiKey; }
           if (body.openrouterKey !== undefined) { openrouterApiKey = body.openrouterKey.trim(); updateObj.openrouterApiKey = openrouterApiKey; }
           if (body.cerebrasKey !== undefined) { cerebrasApiKey = body.cerebrasKey.trim(); updateObj.cerebrasApiKey = cerebrasApiKey; }
+          if (body.hfKey !== undefined) { hfApiKey = body.hfKey.trim(); updateObj.hfApiKey = hfApiKey; }
           if (body.sambanovaKey !== undefined) { sambanovaApiKey = body.sambanovaKey.trim(); updateObj.sambanovaApiKey = sambanovaApiKey; }
           if (body.mistralKey !== undefined) { mistralApiKey = body.mistralKey.trim(); updateObj.mistralApiKey = mistralApiKey; }
           if (body.openaiKey !== undefined) { openaiApiKey = body.openaiKey.trim(); updateObj.openaiApiKey = openaiApiKey; }
@@ -2331,6 +2385,7 @@ const server = Bun.serve({
             hasGroqKey: !!groqApiKey,
             hasOpenRouterKey: !!openrouterApiKey,
             hasCerebrasKey: !!cerebrasApiKey,
+            hasHFKey: !!hfApiKey,
             hasSambaNovaKey: !!sambanovaApiKey,
             hasMistralKey: !!mistralApiKey,
             hasOpenAIKey: !!openaiApiKey,
@@ -2920,6 +2975,71 @@ const server = Bun.serve({
         }
       }
 
+      // 7b. Search Hugging Face Hub for GGUF models. Ollama can pull directly
+      // from the Hub (`ollama pull hf.co/<repo>:<QUANT_TAG>`), so this is a
+      // real search against Hugging Face's own API, not a curated list —
+      // the existing /api/models/pull above already forwards whatever name
+      // it's given to Ollama unchanged, so no pull-side changes were needed.
+      if (url.pathname === "/api/models/huggingface/search" && req.method === "GET") {
+        try {
+          const q = url.searchParams.get("q") || "";
+          const hfRes = await fetch(
+            `https://huggingface.co/api/models?search=${encodeURIComponent(q)}&filter=gguf&sort=downloads&direction=-1&limit=20`,
+            { signal: AbortSignal.timeout(8000) }
+          );
+          if (!hfRes.ok) {
+            return new Response(JSON.stringify({ error: `Hugging Face API returned HTTP ${hfRes.status}` }), { status: 502, headers });
+          }
+          const data: any = await hfRes.json();
+          const results = Array.isArray(data)
+            ? data.map((m: any) => ({
+                id: m.id,
+                author: m.author || m.id.split("/")[0],
+                downloads: m.downloads || 0,
+                likes: m.likes || 0,
+                tags: m.tags || []
+              }))
+            : [];
+          return new Response(JSON.stringify({ results }), { headers });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+        }
+      }
+
+      // 7c. List the real GGUF files of one Hugging Face repo, so the UI can
+      // offer a specific quantization to pull (e.g. Q4_K_M) instead of
+      // guessing a filename. Multi-part sharded GGUFs (e.g.
+      // "...-00001-of-00004.gguf") are excluded: Ollama's tag-based
+      // `hf.co/<repo>:<TAG>` pull matches a single file by quant label and
+      // doesn't reassemble shards, so offering them would silently fail.
+      if (url.pathname === "/api/models/huggingface/files" && req.method === "GET") {
+        try {
+          const repo = url.searchParams.get("repo") || "";
+          if (!repo) return new Response(JSON.stringify({ error: "repo obbligatorio" }), { status: 400, headers });
+          const hfRes = await fetch(`https://huggingface.co/api/models/${repo}`, { signal: AbortSignal.timeout(8000) });
+          if (!hfRes.ok) {
+            return new Response(JSON.stringify({ error: `Hugging Face API returned HTTP ${hfRes.status}` }), { status: 502, headers });
+          }
+          const data: any = await hfRes.json();
+          const siblings: any[] = Array.isArray(data.siblings) ? data.siblings : [];
+          const files = siblings
+            .map((s: any) => s.rfilename as string)
+            .filter((name: string) => name.endsWith(".gguf") && !/-\d{5}-of-\d{5}\.gguf$/i.test(name))
+            .map((name: string) => {
+              // The quant label is the last hyphen-separated segment (it can
+              // itself contain underscores, e.g. "Q4_K_M" or "q3_k_m") —
+              // splitting on underscores/dots too would cut "Q4_K_M" down to
+              // just "M".
+              const base = name.replace(/\.gguf$/i, "");
+              const quant = base.split("-").pop() || base;
+              return { filename: name, quantTag: quant.toUpperCase() };
+            });
+          return new Response(JSON.stringify({ repo, files }), { headers });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+        }
+      }
+
       // 8. Delete Model
       if (url.pathname === "/api/models/delete" && req.method === "POST") {
         try {
@@ -2943,6 +3063,7 @@ const server = Bun.serve({
         else if (activeModel.startsWith("groq/")) speed = "~400 tok/s (Groq LPU)";
         else if (activeModel.startsWith("sambanova/")) speed = "~180 tok/s (SambaNova RDU)";
         else if (activeModel.startsWith("mistral/")) speed = "~90 tok/s (Codestral)";
+        else if (activeModel.startsWith("hf/")) speed = "Varia per provider (HF Router)";
         else if (activeModel.startsWith("gemini")) speed = "~120 tok/s (Google Flash)";
         else if (activeModel.startsWith("openrouter/")) speed = "50 tok/s";
 
@@ -4115,6 +4236,15 @@ async function handleAnthropicProxy(req: Request) {
       }
       const realModelId = modelToUse.replace("mistral/", "");
       return handleOpenAICompatibleStream("https://api.mistral.ai/v1/chat/completions", mistralApiKey, realModelId, body);
+    }
+
+    // 3b. ROUTE TO HUGGING FACE INFERENCE PROVIDERS ROUTER
+    if (modelToUse.startsWith("hf/")) {
+      if (!hfApiKey) {
+        return authErrorResponse("Chiave Hugging Face mancante! Inseriscila nella scheda 'API Keys & Free Providers'. (Ottienila gratis da huggingface.co/settings/tokens)");
+      }
+      const realModelId = modelToUse.replace("hf/", "");
+      return handleOpenAICompatibleStream("https://router.huggingface.co/v1/chat/completions", hfApiKey, realModelId, body);
     }
 
     // 4. ROUTE TO GROQ CLOUD (Free Tier 70B)
