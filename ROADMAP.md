@@ -61,17 +61,13 @@ Ordine pianificato (per rischio crescente):
        `ProviderApiKeys` invece di leggerle da variabili di modulo — evita la
        rinomina di ~20 identificatori in tutto il file. `server.ts` costruisce
        l'oggetto con il nuovo helper `currentProviderKeys()`.
-8. [~] `src/agent/ensemble.ts` estratto (confronto reale multi-provider in
-       parallelo, stesso pattern `ProviderApiKeys` di dispatch.ts). **Non
-       ancora estratti**: `agent/run` (~360 righe, pipeline principale con
-       swarm/ruflo/diagram/prd/review/... e streaming), `agent/autodebug`
-       (~170 righe), `agent/autonomous-loop` (~200 righe), `agent/stop`
-       (banale). Sono il pezzo più corposo e più usato di tutta l'app
-       (streaming via TransformStream, self-HTTP-loopback verso
-       `handleAnthropicProxy`, WebSocket publish) — lasciati per una sessione
-       dedicata con più margine per verificare ogni singolo modo (swarm,
-       ruflo, diagram, prd, review, refactor, test, doc, explain, bench,
-       docker, ci, env) uno per uno dopo l'estrazione.
+8. [~] `src/agent/ensemble.ts` e `src/agent/run.ts` estratti (quest'ultimo,
+       ~360 righe: pipeline standard single-agent, Ruflo Swarm 3-fasi,
+       Swarm Multi-Provider reale, con tutte le 13 modalità slash-command).
+       Verificate manualmente end-to-end tutte e 3 le esecuzioni principali
+       (standard, `/diagram`, `/ruflo`) con chiamate LLM reali, non solo
+       lettura codice. **Non ancora estratti**: `agent/autodebug` (~170
+       righe), `agent/autonomous-loop` (~200 righe), `agent/stop` (banale).
 9. [ ] `src/config/app-config.ts` — le ~20 variabili globali `let xxxApiKey`
        diventano uno store centralizzato invece di variabili sciolte.
 10. [ ] `src/routes/index.ts` + `server.ts` finale ridotto a poche righe.
@@ -142,22 +138,46 @@ probabile codice morto, da verificare/rimuovere durante lo step 8.
   `bun build` non l'ha segnalato, ma un `tsc --noEmit` completo sì
   (`Cannot find name 'EnsembleCandidate'`). Da qui in poi il type-check
   completo è parte della verifica di ogni step, non solo `bun build`.
+- Nell'estrarre `agent/run.ts`, il parametro della nuova funzione è stato
+  chiamato `ctx`, ma il codice originale ha già una variabile locale
+  `const ctx = analyzeProjectContext(workspace)` — il parametro veniva
+  shadowato silenziosamente e `ctx.activeModel`/`ctx.keys`/`ctx.server`
+  risolvevano contro l'oggetto sbagliato. Anche qui trovato da `tsc`, non da
+  `bun build`. Corretto rinominando il parametro in `runCtx`.
+- **Bug preesistente e più serio, non causato dal refactor**: testando
+  manualmente `/ruflo` (pipeline a 3 fasi) end-to-end, la richiesta si
+  interrompeva a metà della prima fase con `curl` che segnalava un
+  trasferimento parziale. Il log mostrava `Bun.serve() timed out a request
+  after 10 seconds` seguito da `TypeError: undefined is not an object
+  (evaluating 'err.message')`: `Bun.serve()` ha un `idleTimeout` di default
+  di 10s, troppo corto per una pipeline che fa 3 chiamate LLM sequenziali
+  prima che l'output raggiunga il client nelle fasi più lente; Bun termina
+  la connessione, e il valore con cui rigetta non è un vero `Error`, quindi
+  `err.message` nel blocco `catch` esistente esplodeva a sua volta. Verificato
+  che il bug esiste dal commit iniziale del progetto (`git log -S`), non
+  introdotto da questa sessione. Corretto con `idleTimeout: 255` (il massimo
+  consentito da Bun) nella config di `Bun.serve` in `server.ts`, più un
+  controllo difensivo `err instanceof Error` nel catch di `agent/run.ts`.
+  Riverificato: `/ruflo` completa tutte e 3 le fasi fino in fondo (5.899
+  byte di output reale), nessun errore in log.
 
 ## Stato
 
 Fase 0 completa (test + CI + i due bug di Fase 0).
 
-Fase 1: **`server.ts` passato da 4.721 a 2.305 righe (-51%)**, 16 nuovi
+Fase 1: **`server.ts` passato da 4.721 a 1.958 righe (-59%)**, 17 nuovi
 moduli estratti in `src/` (whisper, mcp, background-process, catalogs,
 huggingface, git, security-scan, terminal, files, memory, repo-map,
 codebase-index, context, stats, providers/openai-compat, providers/dispatch,
-agent/ensemble). Ogni step verificato con build pulita + **type-check
-completo con `tsc --noEmit`** (ha trovato un import mancante reale che `bun
-build` da solo non segnalava — vedi sotto) + 4/4 smoke test + verifica
-manuale via curl/browser dell'endpoint toccato — inclusi test end-to-end
-reali (pull Hugging Face installato e poi rimosso da Ollama, chat proxy
-reale con streaming SSE, diff-apply che scrive davvero su disco, ensemble
-multi-provider che contatta realmente Cerebras/Mistral/Gemini).
+agent/ensemble, agent/run). Ogni step verificato con build pulita + **type-check
+completo con `tsc --noEmit`** (ha trovato due bug reali — un import mancante
+e uno shadowing di variabile — che `bun build` da solo non segnalava, vedi
+sotto) + 4/4 smoke test + verifica manuale via curl/browser dell'endpoint
+toccato — inclusi test end-to-end reali con chiamate LLM vere (pull Hugging
+Face installato e poi rimosso da Ollama, chat proxy reale con streaming SSE,
+diff-apply che scrive davvero su disco, ensemble multi-provider che contatta
+realmente Cerebras/Mistral/Gemini, pipeline agent/run testata in tutte le
+sue 3 esecuzioni principali).
 
 **Step 7 completato**: `dispatch.ts` (handleAnthropicProxy, ~20 provider) e
 `openai-compat.ts` estratti — senza riscrivere la catena di `if` a registry
@@ -167,10 +187,13 @@ le riceve come parametro `ProviderApiKeys`, costruito da `server.ts` con il
 nuovo helper `currentProviderKeys()`, invece di rinominare ~20 identificatori
 in tutto il file.
 
-**Step 8 parziale**: solo `agent/ensemble.ts` estratto. `agent/run` (~360
-righe, pipeline principale con 13 modalità: swarm/ruflo/diagram/prd/review/
-refactor/test/doc/explain/bench/docker/ci/env), `autodebug` (~170 righe),
-`autonomous-loop` (~200 righe) e `stop` restano in `server.ts` — è la
+**Step 8 quasi completo**: `agent/ensemble.ts` e `agent/run.ts` (la pipeline
+principale, ~360 righe, 13 modalità) estratti e verificati con chiamate LLM
+reali. Durante la verifica di `agent/run.ts` è emerso e stato corretto un bug
+**preesistente** (non causato dal refactor, presente dal commit iniziale del
+progetto) che rendeva `/ruflo` inaffidabile — vedi sezione bug sotto.
+`agent/autodebug` (~170 righe), `agent/autonomous-loop` (~200 righe) e
+`agent/stop` (banale) restano in `server.ts` — è la
 pipeline più corposa e più usata dell'app (streaming via TransformStream,
 self-HTTP-loopback verso `handleAnthropicProxy`, WebSocket publish),
 lasciata volutamente per una sessione con più margine per verificare ogni
