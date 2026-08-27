@@ -10,6 +10,7 @@ dist/
 .env
 .env.local
 .config/settings.json
+.config/auth-token
 .claude/
 *.log
 

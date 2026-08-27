@@ -98,15 +98,40 @@ pena, invece di eseguirlo comunque solo per spuntare la checklist.
 
 ## Fase 2 — Sicurezza da prodotto reale
 
-- [ ] Autenticazione locale: token generato al primo avvio, richiesto in
-      header per tutte le route (asset statici esclusi).
-- [ ] CORS ristretto a origin noti invece di `Access-Control-Allow-Origin: *`
-      ovunque.
-- [ ] Le chiavi API salvate in `.config/settings.json` vanno quantomeno
-      protette con permessi file `600`; valutare cifratura leggera.
-- [ ] `POST /api/workspace/terminal/exec` (esecuzione shell arbitraria) va
-      dietro la stessa autenticazione — oggi è raggiungibile da chiunque
-      possa contattare la porta.
+- [x] Autenticazione locale (`src/config/auth.ts`): token casuale generato al
+      primo avvio e salvato in `.config/auth-token` (mai in git). Verificato
+      in browser: richiesta senza token → 401; `?token=...` sulla pagina
+      principale → redirect 302 + cookie `HttpOnly`/`SameSite=Lax` fissato;
+      ricarica successiva senza query param → funziona (cookie); upgrade
+      WebSocket passa correttamente attraverso lo stesso gate
+      (`socket.readyState === 1` confermato). Le API accettano anche
+      l'header `X-Studio-Token` per script/automazioni. L'unica chiamata di
+      rete reale del server verso se stesso (il bridge Telegram, non le
+      chiamate a `handleAnthropicProxy` di `agent/*.ts` che sono function-call
+      dirette e non passano dall'HTTP) ora include l'header con il token.
+- [x] `POST /api/workspace/terminal/exec` — già coperto dal gate di
+      autenticazione globale sopra, nessun lavoro aggiuntivo necessario.
+- [x] Permessi file `600` su `.config/settings.json` e `.config/auth-token`
+      (le chiavi API/il token restano in chiaro sul disco, ma leggibili solo
+      dal proprietario). Con self-heal: il chmod scatta anche leggendo un
+      file creato prima di questo hardening, non solo alla sua creazione —
+      verificato che un file preesistente a `644` torni a `600` al riavvio.
+      Cifratura non implementata: richiederebbe una passphrase o una chiave
+      derivata dalla macchina, con reale beneficio solo contro un attacco
+      che ha già accesso in lettura al filesystem — a quel punto il
+      problema è un altro. `chmod` è un no-op innocuo su Windows (dove le
+      ACL NTFS, non i permessi POSIX, governano l'accesso).
+- [ ] **Deciso di rimandare**: CORS resta `Access-Control-Allow-Origin: *`
+      ovunque. Motivo: `CORS *` decide solo se una pagina di un'altra origine
+      può *leggere* la risposta — non impedisce l'invio della richiesta. La
+      protezione reale contro un attacco cross-site (un'altra pagina che fa
+      una `fetch`/POST verso questo server usando il cookie della vittima) è
+      già data dal cookie `SameSite=Lax` appena introdotto: i browser non lo
+      allegano a richieste cross-site che non siano una navigazione GET di
+      primo livello. Restringere `*` a un allowlist di origin adesso
+      toccherebbe centinaia di `Response` sparse in tutto il file per un
+      guadagno di sicurezza marginale rispetto a quanto già ottenuto — da
+      rivalutare se in futuro l'app dovesse essere esposta oltre localhost.
 
 ## Fase 3 — UX per utenti non tecnici
 
@@ -224,6 +249,15 @@ da nessuno dei 4 flussi).
 pianificato smetteva di valere il rischio, invece di eseguirlo comunque per
 completezza formale — dettagli nelle rispettive voci sopra.
 
-Prossimo: **Fase 2 — sicurezza da prodotto reale** (autenticazione locale,
-CORS ristretto, protezione chiavi API salvate su disco, hardening di
-`/api/workspace/terminal/exec`).
+**Fase 2 chiusa** (con un item deliberatamente rimandato): autenticazione
+locale via token + cookie (`src/config/auth.ts`), verificata end-to-end in
+browser reale (401 senza token, redirect+cookie con token, WS attraverso il
+gate); permessi `600` self-heal su `.config/settings.json` e
+`.config/auth-token`; `/api/workspace/terminal/exec` già coperto dal gate
+globale. CORS `*` lasciato invariato con motivazione esplicita (il cookie
+`SameSite=Lax` già neutralizza il rischio pratico di CSRF via `fetch`
+cross-site) — vedi dettagli sopra.
+
+Prossimo: **Fase 3 — UX per utenti non tecnici** o **Fase 4 — packaging**,
+oppure passare a `nexus-local-engine` (mai toccato finora in questa
+iniziativa).

@@ -13,7 +13,7 @@
  * rischio/valore peggiore di tutta la Fase 1.
  */
 import { join, resolve } from "path";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "fs";
 
 // import.meta.dir qui è src/config/ — la root del progetto (dove server.ts
 // vive, e dove va cercato/creato .config/settings.json) è due livelli sopra.
@@ -84,6 +84,9 @@ export function loadConfig(): AppConfig {
 
   try {
     if (existsSync(CONFIG_FILE)) {
+      // Self-heal i permessi anche su un file creato prima di questo
+      // hardening (ROADMAP.md, Fase 2) — non aspetta il prossimo save.
+      try { chmodSync(CONFIG_FILE, 0o600); } catch {}
       const raw = readFileSync(CONFIG_FILE, "utf-8");
       const parsed = JSON.parse(raw);
       return { ...defaultConfig, ...parsed };
@@ -102,6 +105,10 @@ export function saveConfig(cfg: Partial<AppConfig>) {
     const current = loadConfig();
     const updated = { ...current, ...cfg };
     writeFileSync(CONFIG_FILE, JSON.stringify(updated, null, 2), "utf-8");
+    // Contiene ~20 chiavi API in chiaro (ROADMAP.md, Fase 2): leggibile solo
+    // dal proprietario. chmod è no-op innocuo su Windows (dove ACL NTFS,
+    // non i permessi POSIX, governano l'accesso al file).
+    try { chmodSync(CONFIG_FILE, 0o600); } catch {}
     return updated;
   } catch (e) {
     console.error("Error saving settings.json:", e);

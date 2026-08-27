@@ -51,8 +51,10 @@ import { handleAgentRun } from "./src/agent/run";
 import { handleAgentAutodebug } from "./src/agent/autodebug";
 import { handleAgentAutonomousLoop } from "./src/agent/autonomous-loop";
 import { loadConfig, saveConfig, CONFIG_FILE, type AppConfig } from "./src/config/app-config";
+import { getOrCreateAuthToken, isRequestAuthorized, wasAuthorizedByQueryParam, authCookieHeader } from "./src/config/auth";
 
 const PORT = Number(process.env.PORT) || 3001;
+const AUTH_TOKEN = getOrCreateAuthToken();
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
 
 // Initialize State from Saved Config
@@ -204,7 +206,10 @@ async function startTelegramPolling(server: any) {
             try {
               const response = await fetch(`http://localhost:${PORT}/v1/messages`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                // Chiamata di rete reale verso se stesso (non una function-call
+                // diretta come per gli altri loopback in agent/*.ts): passa
+                // dal gate di autenticazione, quindi serve il token.
+                headers: { "Content-Type": "application/json", "X-Studio-Token": AUTH_TOKEN },
                 body: JSON.stringify({
                   model: activeModel,
                   messages: [{ role: "user", content: prompt }],
@@ -295,22 +300,42 @@ const server = Bun.serve({
   async fetch(req, server) {
     const url = new URL(req.url);
 
-    // WebSocket Upgrade
-    if (url.pathname === "/ws") {
-      const upgraded = server.upgrade(req);
-      if (upgraded) return undefined;
-      return new Response("WebSocket upgrade failed", { status: 400 });
-    }
-
-    // CORS preflight
+    // CORS preflight — nessun dato sensibile in una preflight, va lasciata
+    // passare sempre o il browser non invia mai la richiesta reale che segue.
     if (req.method === "OPTIONS") {
       return new Response(null, {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, anthropic-version"
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key, anthropic-version, x-studio-token"
         }
       });
+    }
+
+    // Local access token (ROADMAP.md, Fase 2) — prima di questo, chiunque
+    // raggiungesse la porta poteva leggere/scrivere qualunque file nel
+    // workspace o eseguire shell arbitraria via /api/workspace/terminal/exec.
+    if (!isRequestAuthorized(req, AUTH_TOKEN)) {
+      return new Response(
+        "Accesso non autorizzato. Apri l'app con il token stampato in console all'avvio del server (?token=...), oppure passa l'header X-Studio-Token.",
+        { status: 401, headers: { "Content-Type": "text/plain; charset=utf-8" } }
+      );
+    }
+    // Prima visita autenticata via ?token= sulla pagina principale: fissa un
+    // cookie HttpOnly cosi' la navigazione/i fetch successivi (stesso
+    // browser) non devono ripetere il token nell'URL.
+    if (wasAuthorizedByQueryParam(req, AUTH_TOKEN) && (url.pathname === "/" || url.pathname === "/index.html")) {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: url.pathname, "Set-Cookie": authCookieHeader(AUTH_TOKEN) }
+      });
+    }
+
+    // WebSocket Upgrade
+    if (url.pathname === "/ws") {
+      const upgraded = server.upgrade(req);
+      if (upgraded) return undefined;
+      return new Response("WebSocket upgrade failed", { status: 400 });
     }
 
     // Universal Anthropic Compatible Proxy
@@ -1514,6 +1539,8 @@ console.log(`📂 Attached Workspace: ${attachedWorkspacePath}`);
 console.log(`💾 Persistent Config File: ${CONFIG_FILE}`);
 console.log(`⚡ Anthropic API Proxy: http://localhost:${PORT}/v1/messages`);
 console.log(`🤖 Active Model: ${activeModel}`);
+console.log(`🔑 Apri lo Studio con: http://localhost:${PORT}/?token=${AUTH_TOKEN}`);
+console.log(`   (prima visita: fissa un cookie locale; le API accettano anche l'header X-Studio-Token)`);
 console.log(`======================================================\n`);
 
 if (telegramEnabled && telegramBotToken) {
