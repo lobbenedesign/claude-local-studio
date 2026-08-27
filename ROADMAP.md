@@ -160,10 +160,31 @@ pena, invece di eseguirlo comunque solo per spuntare la checklist.
 
 ## Fase 4 — Packaging da app installabile
 
-- [ ] Valutare Tauri (già usato nel progetto gemello `claude-coder-tauri`,
-      stessa famiglia di progetti) rispetto a Electron.
-- [ ] Bundle del runtime Bun + assets, icona, installer `.dmg` per macOS
-      (piattaforma primaria dell'utente).
+- [x] **Tauri vs Electron: deciso di non usare nessuno dei due.** Entrambi
+      richiederebbero incorporare un intero webview/Chromium solo per
+      mostrare un'interfaccia che oggi è già servita perfettamente da
+      `Bun.serve` e aperta nel browser di sistema dell'utente — un costo di
+      toolchain (Rust+Xcode per Tauri, Node+Electron ~150MB per Electron)
+      senza un beneficio reale, dato che l'app non ha bisogno di API native
+      desktop (menu, tray, file system dialog nativi) che solo un
+      wrapper webview darebbe. Scelto invece **`bun build --compile`**
+      (nativo dello stesso runtime già in uso): produce un eseguibile Bun
+      standalone da ~70MB che include l'intero server compilato, impacchettato
+      in un vero bundle `.app` che apre il browser di default dell'utente —
+      stesso risultato per l'utente finale (doppio click, nessun terminale,
+      nessuna installazione di Bun/Node), con una superficie tecnica molto
+      più piccola da mantenere.
+- [x] Bundle del runtime Bun + assets, icona, installer `.dmg` per macOS:
+      nuovo script `scripts/build-macos-app.sh` (`bun run package:macos`) che
+      compila `server.ts` in un binario standalone, lo impacchetta in
+      `Claude Local Studio.app` (icona `.icns` generata, `Info.plist`,
+      launcher che apre il browser sull'URL già autenticato — stesso schema
+      di `start-macos.command`) e genera `Claude-Local-Studio-<versione>.dmg`
+      via `hdiutil`. Verificato end-to-end: eseguibile compilato lanciato
+      direttamente con `STUDIO_RESOURCES_DIR` impostato come lo imposterebbe
+      il launcher, token creato con permessi 600, asset statici serviti da
+      `Contents/Resources/public`, tutte le rotte API rispondono, workspace
+      di default punta alla home dell'utente (non dentro il bundle).
 
 ---
 
@@ -223,6 +244,35 @@ pena, invece di eseguirlo comunque solo per spuntare la checklist.
   Riverificato: `/ruflo` completa tutte e 3 le fasi fino in fondo (5.899
   byte di output reale), nessun errore in log.
 
+## Bug scoperti e corretti durante la Fase 4
+
+- **Path resolution rotta in un binario compilato.** Tutti i calcoli tipo
+  `join(import.meta.dir, "..", "..")` sparsi in `app-config.ts`, `auth.ts`,
+  `whisper.ts` e `server.ts` assumevano che `import.meta.dir` fosse sempre un
+  path reale su disco vicino alla root del progetto. In un eseguibile
+  compilato con `bun build --compile`, `import.meta.dir` risolve invece a un
+  path virtuale dentro `/$bunfs/...` — nessuno di quei file (`public/`,
+  `.config/`, `whisper-models/`) esisteva davvero lì, quindi il binario
+  compilato non avrebbe mai trovato i propri asset. Mai emerso prima perché
+  nessuno aveva ancora provato a compilare il progetto. Corretto centralizzando
+  la risoluzione in `src/config/paths.ts`: rileva se gira compilato
+  (`import.meta.dir.includes("$bunfs")`) e in quel caso usa la cartella
+  dell'eseguibile reale (`dirname(process.execPath)`, o `STUDIO_RESOURCES_DIR`
+  se impostata dal launcher del bundle `.app`) invece di `import.meta.dir`.
+  Verificato lanciando il binario compilato da solo con `STUDIO_RESOURCES_DIR`
+  impostato come lo imposterebbe il launcher reale: token creato con permessi
+  corretti, asset statici serviti, tutte le API rispondono.
+- **Workspace di default dentro il bundle `.app`.** Una volta risolto il bug
+  sopra, il primo avvio del binario compilato impostava il workspace di
+  default a `resolve(PROJECT_ROOT, "..")` — che ora, in modalità compilata, è
+  la cartella `Contents/` dentro il bundle `.app` stesso, non una cartella
+  utile per l'utente. Un utente che avesse installato l'app e cliccato
+  "Explorer" senza cambiare workspace si sarebbe trovato a sfogliare i file
+  interni dell'app. Corretto in `app-config.ts`: quando `IS_COMPILED` è vero,
+  il default è `homedir()` invece della cartella padre del progetto.
+  Riverificato: il log di avvio del binario compilato mostra ora
+  `📂 Attached Workspace: /Users/<utente>`.
+
 ## Stato
 
 Fase 0 completa (test + CI + i due bug di Fase 0).
@@ -281,6 +331,17 @@ reale; launcher macOS/Windows corretti per la regressione introdotta dalla
 Fase 2 (aprivano un URL senza token, ora 401). Gestione errori uniforme
 rimandata — troppo diffusa per un intervento mirato di valore ora.
 
-Prossimo: **Fase 4 — packaging** (Tauri vs Electron, installer `.dmg`),
-oppure passare a `nexus-local-engine` (mai toccato finora in questa
-iniziativa).
+**Fase 4 chiusa**: valutazione Tauri vs Electron risolta scegliendo nessuno
+dei due (motivazione sopra), packaging fatto con `bun build --compile` +
+bundle `.app` + `.dmg` (`scripts/build-macos-app.sh`). Durante la
+preparazione è emerso e stato corretto un bug reale che sarebbe stato
+invisibile finché nessuno avesse mai provato a impacchettare l'app (vedi
+sezione bug sotto): tutti i punti che calcolavano la root del progetto con
+`import.meta.dir` erano rotti in un eseguibile compilato, e il workspace di
+default puntava dentro il bundle `.app` invece che nella home dell'utente.
+
+Prossimo: `claude-local-studio` ha completato tutte e 4 le fasi previste
+dalla roadmap. Resta da valutare se passare lo stesso trattamento a
+`nexus-local-engine` (mai toccato finora in questa iniziativa), oppure
+riprendere item deliberatamente rimandati (CORS, gestione errori uniforme,
+route table, path traversal nel file serving statico — vedi bug Fase 4).

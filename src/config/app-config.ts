@@ -14,11 +14,9 @@
  */
 import { join, resolve } from "path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "fs";
+import { homedir } from "os";
+import { CONFIG_DIR, PROJECT_ROOT, IS_COMPILED } from "./paths";
 
-// import.meta.dir qui è src/config/ — la root del progetto (dove server.ts
-// vive, e dove va cercato/creato .config/settings.json) è due livelli sopra.
-const PROJECT_ROOT = join(import.meta.dir, "..", "..");
-const CONFIG_DIR = join(PROJECT_ROOT, ".config");
 export const CONFIG_FILE = join(CONFIG_DIR, "settings.json");
 
 export interface AppConfig {
@@ -54,8 +52,12 @@ export function loadConfig(): AppConfig {
   const defaultConfig: AppConfig = {
     activeModel: "qwen2.5:7b",
     // Il workspace di default è la cartella che contiene claude-local-studio
-    // (in questo repo, la cartella "LLM" con i progetti gemelli).
-    attachedWorkspacePath: resolve(PROJECT_ROOT, ".."),
+    // (in questo repo, la cartella "LLM" con i progetti gemelli). In un
+    // binario compilato (Fase 4, packaging) PROJECT_ROOT è invece
+    // Contents/Resources dentro il bundle .app — puntarci la workspace di
+    // default mostrerebbe all'utente i file interni dell'app invece dei
+    // suoi progetti, quindi lì il default è la home dell'utente.
+    attachedWorkspacePath: IS_COMPILED ? homedir() : resolve(PROJECT_ROOT, ".."),
     geminiApiKey: process.env.GEMINI_API_KEY || "",
     groqApiKey: process.env.GROQ_API_KEY || "",
     openrouterApiKey: process.env.OPENROUTER_API_KEY || "",

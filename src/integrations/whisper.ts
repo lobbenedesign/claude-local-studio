@@ -17,6 +17,7 @@ import { join } from "path";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { spawn } from "bun";
+import { WHISPER_MODELS_DIR } from "../config/paths";
 
 let whisperCliPathCache: string | null | undefined = undefined;
 export function findWhisperCliPath(): string | null {
@@ -39,7 +40,7 @@ export function findWhisperModelPath(): string | null {
   if (whisperModelPathCache !== undefined) return whisperModelPathCache;
   const candidates = [
     process.env.WHISPER_MODEL_PATH,
-    join(import.meta.dir, "..", "..", "whisper-models", "ggml-base.bin"),
+    join(WHISPER_MODELS_DIR, "ggml-base.bin"),
     join(homedir(), ".cache", "whisper.cpp", "ggml-base.bin")
   ].filter(Boolean) as string[];
   for (const c of candidates) {
@@ -65,7 +66,7 @@ export async function transcribeAudioWithWhisper(audioBytes: Uint8Array, sourceE
   const modelPath = findWhisperModelPath();
   const ffmpegPath = findFfmpegPath();
   if (!whisperCli) throw new Error("whisper-cli non trovato. Installa con: brew install whisper-cpp");
-  if (!modelPath) throw new Error(`Modello Whisper (ggml-base.bin) non trovato. Scaricalo con: curl -L -o "${join(import.meta.dir, "..", "..", "whisper-models", "ggml-base.bin")}" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin`);
+  if (!modelPath) throw new Error(`Modello Whisper (ggml-base.bin) non trovato. Scaricalo con: curl -L -o "${join(WHISPER_MODELS_DIR, "ggml-base.bin")}" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin`);
   if (!ffmpegPath) throw new Error("ffmpeg non trovato (richiesto per convertire l'audio del browser in WAV 16kHz mono). Installa con: brew install ffmpeg");
 
   const tmpId = crypto.randomUUID();

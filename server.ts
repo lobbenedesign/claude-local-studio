@@ -52,6 +52,7 @@ import { handleAgentAutodebug } from "./src/agent/autodebug";
 import { handleAgentAutonomousLoop } from "./src/agent/autonomous-loop";
 import { loadConfig, saveConfig, CONFIG_FILE, type AppConfig } from "./src/config/app-config";
 import { getOrCreateAuthToken, isRequestAuthorized, wasAuthorizedByQueryParam, authCookieHeader } from "./src/config/auth";
+import { PROJECT_ROOT, PUBLIC_DIR } from "./src/config/paths";
 
 const PORT = Number(process.env.PORT) || 3001;
 const AUTH_TOKEN = getOrCreateAuthToken();
@@ -234,9 +235,9 @@ async function startTelegramPolling(server: any) {
 
 // Cross-Platform Claude CLI Detection
 const possibleCliPaths = [
-  join(import.meta.dir, "..", "claude-code-main", "claude-code-main", "dist", "cli.js"),
-  join(import.meta.dir, "..", "claude-code-main", "dist", "cli.js"),
-  join(import.meta.dir, "claude-code-main", "dist", "cli.js")
+  join(PROJECT_ROOT, "..", "claude-code-main", "claude-code-main", "dist", "cli.js"),
+  join(PROJECT_ROOT, "..", "claude-code-main", "dist", "cli.js"),
+  join(PROJECT_ROOT, "claude-code-main", "dist", "cli.js")
 ];
 let CLAUDE_CLI_PATH = possibleCliPaths.find(p => existsSync(p)) || possibleCliPaths[0];
 
@@ -1511,7 +1512,7 @@ const server = Bun.serve({
     let filePath = url.pathname;
     if (filePath === "/" || filePath === "") filePath = "/index.html";
 
-    const localPath = join(import.meta.dir, "public", filePath);
+    const localPath = join(PUBLIC_DIR, filePath);
     if (existsSync(localPath) && statSync(localPath).isFile()) {
       const file = Bun.file(localPath);
       return new Response(file);

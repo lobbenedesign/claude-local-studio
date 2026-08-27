@@ -16,10 +16,10 @@
  * autenticarsi con l'header `X-Studio-Token`.
  */
 import { join } from "path";
-import { existsSync, readFileSync, writeFileSync, chmodSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from "fs";
+import { CONFIG_DIR } from "./paths";
 
-const PROJECT_ROOT = join(import.meta.dir, "..", "..");
-const TOKEN_FILE = join(PROJECT_ROOT, ".config", "auth-token");
+const TOKEN_FILE = join(CONFIG_DIR, "auth-token");
 export const AUTH_COOKIE_NAME = "studio_token";
 
 export function getOrCreateAuthToken(): string {
@@ -38,6 +38,7 @@ export function getOrCreateAuthToken(): string {
 
   const token = crypto.randomUUID().replace(/-/g, "");
   try {
+    mkdirSync(CONFIG_DIR, { recursive: true });
     writeFileSync(TOKEN_FILE, token, "utf-8");
     try { chmodSync(TOKEN_FILE, 0o600); } catch {}
   } catch (e) {
