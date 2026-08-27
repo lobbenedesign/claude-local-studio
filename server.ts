@@ -1512,8 +1512,18 @@ const server = Bun.serve({
     let filePath = url.pathname;
     if (filePath === "/" || filePath === "") filePath = "/index.html";
 
-    const localPath = join(PUBLIC_DIR, filePath);
-    if (existsSync(localPath) && statSync(localPath).isFile()) {
+    // Difesa in profondità: il path richiesto deve restare dentro
+    // PUBLIC_DIR anche dopo il resolve. In pratica Bun normalizza già ".."
+    // dentro new URL(req.url) prima che url.pathname arrivi qui (verificato
+    // via TCP grezzo contro questo stesso codice), quindi non è la
+    // chiusura di un exploit dimostrato — ma non costa nulla non fare
+    // affidamento solo su un dettaglio implementativo del parser URL di
+    // Bun (stesso hardening applicato a nexus-local-engine).
+    const localPath = resolve(PUBLIC_DIR, "." + filePath);
+    if (
+      (localPath === PUBLIC_DIR || localPath.startsWith(PUBLIC_DIR + sep)) &&
+      existsSync(localPath) && statSync(localPath).isFile()
+    ) {
       const file = Bun.file(localPath);
       return new Response(file);
     }

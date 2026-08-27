@@ -340,8 +340,26 @@ sezione bug sotto): tutti i punti che calcolavano la root del progetto con
 `import.meta.dir` erano rotti in un eseguibile compilato, e il workspace di
 default puntava dentro il bundle `.app` invece che nella home dell'utente.
 
+**Hardening successivo (fuori dalle 4 fasi)**: aggiunto un controllo
+esplicito di boundary nel file serving statico (`server.ts`, la rotta
+catch-all che serve `public/`), che prima univa `PUBLIC_DIR` + pathname
+senza validare che il risultato restasse dentro `public/`. Nota di onestà:
+questo stesso controllo era stato aggiunto e descritto in
+`nexus-local-engine` come "correzione di un path traversal reale,
+verificato con `curl --path-as-is`" — verifica poi risultata **sbagliata**
+testando lo stesso payload via TCP grezzo contro il codice pre-fix, che
+rispondeva già onestamente 404: `new URL(req.url)` di Bun normalizza `..`
+nel pathname lato server durante il parsing, indipendentemente da come il
+client lo ha inviato sul filo, quindi non è mai stato un exploit
+riproducibile con nessun payload provato. La stessa correzione è stata
+applicata qui per coerenza e come difesa in profondità (non fa male, non
+dipende da un dettaglio implementativo del parser URL di Bun), ma va
+etichettata per quello che è: hardening precauzionale, non la chiusura di
+un exploit dimostrato. Vedi il commit `dd8acae` di `nexus-local-engine` per
+i dettagli della verifica.
+
 Prossimo: `claude-local-studio` ha completato tutte e 4 le fasi previste
 dalla roadmap. Resta da valutare se passare lo stesso trattamento a
-`nexus-local-engine` (mai toccato finora in questa iniziativa), oppure
-riprendere item deliberatamente rimandati (CORS, gestione errori uniforme,
-route table, path traversal nel file serving statico — vedi bug Fase 4).
+`nexus-local-engine` (già fatto, vedi il suo ROADMAP.md), oppure riprendere
+item deliberatamente rimandati (CORS, gestione errori uniforme, route
+table).

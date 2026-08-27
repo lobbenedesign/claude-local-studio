@@ -117,3 +117,23 @@ describe("smoke: workspace file read", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("smoke: static file serving boundary", () => {
+  test("path traversal outside public/ is blocked even when authenticated", async () => {
+    // Difesa in profondità (ROADMAP.md, Fase 4 correzione): in pratica Bun
+    // normalizza già ".." dentro new URL(req.url) lato server prima che
+    // url.pathname arrivi al codice applicativo — verificato via TCP grezzo
+    // che anche il codice pre-hardening rispondesse onestamente 404 allo
+    // stesso payload, quindi non era un exploit riproducibile. --path-as-is
+    // di curl impedisce solo la normalizzazione lato client (fetch()/
+    // browser la farebbero comunque), non quella che Bun applica lato
+    // server. Il controllo resta come guardia esplicita, non implicita.
+    const curl = Bun.spawnSync([
+      "curl", "-s", "--path-as-is", "-o", "/dev/null", "-w", "%{http_code}",
+      "-H", `X-Studio-Token: ${authToken}`,
+      `${BASE}/../.config/settings.json`
+    ]);
+    const status = new TextDecoder().decode(curl.stdout).trim();
+    expect(status).not.toBe("200");
+  });
+});
