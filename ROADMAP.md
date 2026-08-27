@@ -61,20 +61,21 @@ Ordine pianificato (per rischio crescente):
        `ProviderApiKeys` invece di leggerle da variabili di modulo — evita la
        rinomina di ~20 identificatori in tutto il file. `server.ts` costruisce
        l'oggetto con il nuovo helper `currentProviderKeys()`.
-8. [~] `src/agent/ensemble.ts` e `src/agent/run.ts` estratti (quest'ultimo,
-       ~360 righe: pipeline standard single-agent, Ruflo Swarm 3-fasi,
-       Swarm Multi-Provider reale, con tutte le 13 modalità slash-command).
-       Verificate manualmente end-to-end tutte e 3 le esecuzioni principali
-       (standard, `/diagram`, `/ruflo`) con chiamate LLM reali, non solo
-       lettura codice. **Non ancora estratti**: `agent/autodebug` (~170
-       righe), `agent/autonomous-loop` (~200 righe), `agent/stop` (banale).
+8. [x] `src/agent/ensemble.ts`, `run.ts`, `autodebug.ts`, `autonomous-loop.ts`
+       — tutti e 4 i flussi agentici estratti. `agent/stop` lasciato inline
+       in `server.ts` (banale). Ogni modulo verificato end-to-end con
+       chiamate LLM reali: standard/`/diagram`/`/ruflo` (run.ts), un ciclo
+       autodebug completo su un comando che fallisce davvero (autodebug.ts),
+       e sia `read_file` che `write_file` reali su una workspace di scratch
+       isolata, incluso il controllo dei confini del workspace
+       (autonomous-loop.ts).
 9. [ ] `src/config/app-config.ts` — le ~20 variabili globali `let xxxApiKey`
        diventano uno store centralizzato invece di variabili sciolte.
 10. [ ] `src/routes/index.ts` + `server.ts` finale ridotto a poche righe.
 
-Trovato durante la mappatura: `currentAgentProcess` (variabile globale per
-"stop agent") non è mai assegnato da nessuno dei 4 flussi agentici attuali —
-probabile codice morto, da verificare/rimuovere durante lo step 8.
+`currentAgentProcess` (variabile globale per "stop agent") confermato
+codice morto — nessuno dei 4 flussi agentici lo assegnava mai. Rimosso
+insieme all'estrazione dello step 8, invece di trascinarlo oltre.
 
 ## Fase 2 — Sicurezza da prodotto reale
 
@@ -165,19 +166,22 @@ probabile codice morto, da verificare/rimuovere durante lo step 8.
 
 Fase 0 completa (test + CI + i due bug di Fase 0).
 
-Fase 1: **`server.ts` passato da 4.721 a 1.958 righe (-59%)**, 17 nuovi
+Fase 1: **`server.ts` passato da 4.721 a 1.612 righe (-66%)**, 19 nuovi
 moduli estratti in `src/` (whisper, mcp, background-process, catalogs,
 huggingface, git, security-scan, terminal, files, memory, repo-map,
 codebase-index, context, stats, providers/openai-compat, providers/dispatch,
-agent/ensemble, agent/run). Ogni step verificato con build pulita + **type-check
-completo con `tsc --noEmit`** (ha trovato due bug reali — un import mancante
-e uno shadowing di variabile — che `bun build` da solo non segnalava, vedi
-sotto) + 4/4 smoke test + verifica manuale via curl/browser dell'endpoint
-toccato — inclusi test end-to-end reali con chiamate LLM vere (pull Hugging
-Face installato e poi rimosso da Ollama, chat proxy reale con streaming SSE,
-diff-apply che scrive davvero su disco, ensemble multi-provider che contatta
-realmente Cerebras/Mistral/Gemini, pipeline agent/run testata in tutte le
-sue 3 esecuzioni principali).
+agent/ensemble, agent/run, agent/autodebug, agent/autonomous-loop). Ogni step
+verificato con build pulita + **type-check completo con `tsc --noEmit`**
+(ha trovato due bug reali — un import mancante e uno shadowing di variabile
+— che `bun build` da solo non segnalava, vedi sotto) + 4/4 smoke test +
+verifica manuale via curl/browser dell'endpoint toccato — inclusi test
+end-to-end reali con chiamate LLM vere (pull Hugging Face installato e poi
+rimosso da Ollama, chat proxy reale con streaming SSE, diff-apply che scrive
+davvero su disco, ensemble multi-provider che contatta realmente
+Cerebras/Mistral/Gemini, tutte e 3 le esecuzioni principali di agent/run, un
+ciclo autodebug completo su un comando che fallisce davvero, e sia
+`read_file` che `write_file` reali dell'autonomous-loop su una workspace di
+scratch isolata).
 
 **Step 7 completato**: `dispatch.ts` (handleAnthropicProxy, ~20 provider) e
 `openai-compat.ts` estratti — senza riscrivere la catena di `if` a registry
@@ -187,18 +191,16 @@ le riceve come parametro `ProviderApiKeys`, costruito da `server.ts` con il
 nuovo helper `currentProviderKeys()`, invece di rinominare ~20 identificatori
 in tutto il file.
 
-**Step 8 quasi completo**: `agent/ensemble.ts` e `agent/run.ts` (la pipeline
-principale, ~360 righe, 13 modalità) estratti e verificati con chiamate LLM
-reali. Durante la verifica di `agent/run.ts` è emerso e stato corretto un bug
-**preesistente** (non causato dal refactor, presente dal commit iniziale del
-progetto) che rendeva `/ruflo` inaffidabile — vedi sezione bug sotto.
-`agent/autodebug` (~170 righe), `agent/autonomous-loop` (~200 righe) e
-`agent/stop` (banale) restano in `server.ts` — è la
-pipeline più corposa e più usata dell'app (streaming via TransformStream,
-self-HTTP-loopback verso `handleAnthropicProxy`, WebSocket publish),
-lasciata volutamente per una sessione con più margine per verificare ogni
-modalità singolarmente invece di rischiare un'estrazione affrettata sulla
-feature più critica.
+**Step 8 completato**: tutti e 4 i flussi agentici estratti
+(`ensemble.ts`, `run.ts`, `autodebug.ts`, `autonomous-loop.ts`); `agent/stop`
+lasciato inline (banale). Durante la verifica è emerso e stato corretto un
+bug **preesistente** (non causato dal refactor, presente dal commit iniziale
+del progetto) che rendeva `/ruflo` inaffidabile — vedi sezione bug sopra.
+Rimosso anche `currentAgentProcess`, confermato codice morto (mai assegnato
+da nessuno dei 4 flussi).
 
-Step 9 (config store) e step 10 (routes finali + server.ts sottile) restano
-da fare. Aggiornare le checkbox qui sopra ad ogni sessione futura.
+**Fase 1 sostanzialmente completa**: restano solo step 9 (config store —
+consolidare le ~20 `let xxxApiKey` sparse) e step 10 (routes finali +
+`server.ts` ridotto a poche righe di bootstrap). Da qui in poi conviene
+valutare se procedere con questi due step di rifinitura o passare alla Fase 2
+(sicurezza). Aggiornare le checkbox qui sopra ad ogni sessione futura.

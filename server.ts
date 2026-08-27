@@ -1,4 +1,4 @@
-import { spawn, type Subprocess } from "bun";
+import { spawn } from "bun";
 import { join, resolve, relative, basename, dirname, sep } from "path";
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
 import { homedir, tmpdir } from "os";
@@ -48,6 +48,8 @@ import { addTokensProcessed, getTokensProcessed } from "./src/stats";
 import { handleAnthropicProxy, type ProviderApiKeys } from "./src/providers/dispatch";
 import { getConfiguredEnsembleCandidates, callEnsembleCandidateNonStreaming } from "./src/agent/ensemble";
 import { handleAgentRun } from "./src/agent/run";
+import { handleAgentAutodebug } from "./src/agent/autodebug";
+import { handleAgentAutonomousLoop } from "./src/agent/autonomous-loop";
 
 const PORT = Number(process.env.PORT) || 3001;
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
@@ -186,7 +188,6 @@ function currentProviderKeys(): ProviderApiKeys {
   };
 }
 
-let currentAgentProcess: Subprocess | null = null;
 let sessionStartTime = Date.now();
 
 // Telegram Bot Message Sender
@@ -1383,158 +1384,7 @@ const server = Bun.serve({
 
       // 10b. Autonomous Auto-Debug & Self-Healing Test Loop (OpenCode / SWE-Agent Style)
       if (url.pathname === "/api/agent/autodebug" && req.method === "POST") {
-        try {
-          const body: any = await req.json();
-          const testCommand = body.command || "npm test";
-          const maxIterations = body.maxIterations || 3;
-          const workspace = resolve(body.workspace || attachedWorkspacePath);
-
-          const { readable, writable } = new TransformStream();
-          const writer = writable.getWriter();
-          const encoder = new TextEncoder();
-
-          (async () => {
-            const sendEvent = async (type: string, data: any) => {
-              try {
-                await writer.write(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`));
-              } catch {}
-            };
-
-            for (let iter = 1; iter <= maxIterations; iter++) {
-              await sendEvent("iteration_start", {
-                iteration: iter,
-                maxIterations,
-                command: testCommand
-              });
-
-              // Execute command inside project workspace
-              let stdoutText = "";
-              let stderrText = "";
-              let exitCode = 0;
-
-              try {
-                const proc = Bun.spawn(["bash", "-c", testCommand], {
-                  cwd: workspace,
-                  stdout: "pipe",
-                  stderr: "pipe"
-                });
-
-                const [outStr, errStr] = await Promise.all([
-                  new Response(proc.stdout).text(),
-                  new Response(proc.stderr).text()
-                ]);
-
-                exitCode = await proc.exited;
-                stdoutText = outStr;
-                stderrText = errStr;
-              } catch (runErr: any) {
-                exitCode = 1;
-                stderrText = runErr.message;
-              }
-
-              await sendEvent("command_output", {
-                iteration: iter,
-                exitCode,
-                stdout: stdoutText,
-                stderr: stderrText
-              });
-
-              // If passed, exit loop!
-              if (exitCode === 0) {
-                await sendEvent("success", {
-                  iteration: iter,
-                  message: `✅ Test superato con successo al ciclo ${iter}!`
-                });
-                break;
-              }
-
-              // If failed, send to LLM for autonomous analysis & code fix
-              await sendEvent("analyzing_error", {
-                iteration: iter,
-                errorSummary: (stderrText || stdoutText).slice(0, 2000)
-              });
-
-              const ctx = analyzeProjectContext(workspace);
-              const fileList = ctx.tree ? ctx.tree.map((n: any) => n.name).join(", ") : "";
-
-              const debugPrompt = `Il comando di test '${testCommand}' è FALLITO con codice di uscita ${exitCode}.
-
---- ERRORE RILEVATO (OUTPUT / STDERR) ---
-${stderrText || stdoutText}
------------------------------------------
-
-Workspace: ${workspace}
-File nel progetto: ${fileList}
-${ctx.rulesSnippet ? `Regole di progetto (${ctx.rulesFileName}):\n${ctx.rulesSnippet}\n` : ''}
-
-Fornisci in modo chiaro e conciso:
-1. 🔍 **Causa Principale del Bug** (Root Cause)
-2. 📍 **File e Riga Interessati**
-3. 🛠️ **Codice di Correzione da applicare** (Fornisci lo snippet o il diff completo pronto all'uso)`;
-
-              const debugPayload = {
-                model: activeModel,
-                system: "Sei un Autonomous SWE Debugger Engine avanzato (OpenCode / SWE-bench). Analizza gli stack trace ed emetti diagnosi e correzioni pronte all'uso.",
-                messages: [{ role: "user", content: debugPrompt }],
-                stream: true
-              };
-
-              const proxyReq = new Request(`http://localhost:${PORT}/v1/messages`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(debugPayload)
-              });
-
-              const proxyRes = await handleAnthropicProxy(proxyReq, activeModel, currentProviderKeys());
-              if (proxyRes.ok && proxyRes.body) {
-                const reader = proxyRes.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = "";
-
-                while (true) {
-                  const { done, value } = await reader.read();
-                  if (done) break;
-                  buffer += decoder.decode(value, { stream: true });
-                  const lines = buffer.split("\n");
-                  buffer = lines.pop() || "";
-
-                  for (const line of lines) {
-                    if (!line.startsWith("data: ")) continue;
-                    const jsonStr = line.slice(6).trim();
-                    if (!jsonStr || jsonStr === "[DONE]") continue;
-                    try {
-                      const parsed = JSON.parse(jsonStr);
-                      if (parsed.type === "content_block_delta" && parsed.delta?.text) {
-                        await sendEvent("fix_chunk", { text: parsed.delta.text });
-                      }
-                    } catch {}
-                  }
-                }
-              }
-
-              if (iter === maxIterations) {
-                await sendEvent("finished", {
-                  iteration: iter,
-                  message: `Raggiunto il numero massimo di iterazioni (${maxIterations}).`
-                });
-              }
-            }
-
-            await sendEvent("done", {});
-            try { await writer.close(); } catch {}
-          })();
-
-          return new Response(readable, {
-            headers: {
-              "Content-Type": "text/event-stream",
-              "Access-Control-Allow-Origin": "*",
-              "Cache-Control": "no-cache",
-              "Connection": "keep-alive"
-            }
-          });
-        } catch (e: any) {
-          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
-        }
+        return handleAgentAutodebug(req, { activeModel, attachedWorkspacePath, keys: currentProviderKeys(), server });
       }
 
       // 10c. Autonomous Multi-Step Agentic Loop (Cursor Agent / Cline style)
@@ -1551,211 +1401,15 @@ Fornisci in modo chiaro e conciso:
       // oggetto JSON per passo; se non lo fa per 2 passi consecutivi il loop
       // si ferma onestamente invece di continuare a vuoto.
       if (url.pathname === "/api/agent/autonomous-loop" && req.method === "POST") {
-        try {
-          const body: any = await req.json();
-          const task: string = body.task || "";
-          const workspace = resolve(body.workspace || attachedWorkspacePath);
-          const maxSteps = Math.min(Math.max(body.maxSteps || 8, 1), 15);
-          const testCommand: string = body.testCommand || "";
-
-          if (!task.trim()) {
-            return new Response(JSON.stringify({ error: "Task obbligatorio" }), { status: 400, headers });
-          }
-
-          const { readable, writable } = new TransformStream();
-          const writer = writable.getWriter();
-          const encoder = new TextEncoder();
-
-          (async () => {
-            const write = async (text: string) => { try { await writer.write(encoder.encode(text)); } catch {} };
-
-            await write(`\n🤖 [LOOP AGENTICO AUTONOMO AVVIATO] — max ${maxSteps} passi\n════════════════════════════════════════════════════════════════\nObiettivo: ${task}\n`);
-
-            const repoMap = buildAstRepoMap(workspace);
-            const actionHistory: string[] = [];
-            let filesWritten = 0;
-            const MAX_WRITES = 20;
-            let consecutiveParseFailures = 0;
-            let stopped = false;
-            let stopReason = "";
-
-            for (let step = 1; step <= maxSteps && !stopped; step++) {
-              await write(`\n── Passo ${step}/${maxSteps} ──\n`);
-
-              const systemPrompt = `Sei un agente di coding autonomo che opera in un vero workspace locale: "${workspace}".
-Il tuo obiettivo: ${task}
-
-Puoi eseguire UNA sola azione per volta. Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, senza testo prima o dopo, in uno di questi formati esatti:
-{"action": "read_file", "path": "percorso/relativo.ts", "reason": "perché ti serve"}
-{"action": "write_file", "path": "percorso/relativo.ts", "content": "contenuto completo del file", "reason": "cosa stai cambiando e perché"}
-{"action": "run_test", "reason": "perché vuoi verificare ora"}
-{"action": "done", "summary": "riassunto di cosa è stato fatto e perché il task è completo"}
-
-Regole:
-- "write_file" scrive SEMPRE il contenuto COMPLETO del file (non una diff, non un frammento parziale).
-- I percorsi sono relativi alla root del workspace. Non puoi uscire dal workspace (../ viene rifiutato).
-- Usa "run_test" solo se è stato fornito un comando di test.
-- Usa "done" solo quando sei ragionevolmente sicuro che il task sia completo.
-${testCommand ? `Comando di test disponibile: ${testCommand}` : "Nessun comando di test configurato per questo loop: non usare run_test."}
-
-Repo map reale (simboli del progetto):
-${repoMap.mapString.slice(0, 4000)}
-
-Storico azioni ed osservazioni finora (più recenti in fondo):
-${actionHistory.slice(-8).join("\n\n") || "(nessuna azione ancora, questo è il primo passo)"}`;
-
-              const payload = {
-                model: activeModel,
-                system: systemPrompt,
-                messages: [{ role: "user", content: "Qual è la prossima singola azione? Rispondi solo con il JSON, nient'altro." }],
-                stream: false
-              };
-              const proxyReq = new Request(`http://localhost:${PORT}/v1/messages`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-              });
-
-              let rawText = "";
-              try {
-                const proxyRes = await handleAnthropicProxy(proxyReq, activeModel, currentProviderKeys());
-                const data: any = await proxyRes.json();
-                rawText = data?.content?.[0]?.text || "";
-              } catch (e: any) {
-                rawText = "";
-              }
-
-              const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-              let actionObj: any = null;
-              if (jsonMatch) {
-                try { actionObj = JSON.parse(jsonMatch[0]); } catch {}
-              }
-
-              if (!actionObj || !actionObj.action) {
-                consecutiveParseFailures++;
-                await write(`⚠️ Risposta del modello non era un JSON valido: "${rawText.slice(0, 200)}"\n`);
-                actionHistory.push(`[Passo ${step}] ERRORE: risposta non era JSON valido.`);
-                if (consecutiveParseFailures >= 2) {
-                  stopped = true;
-                  stopReason = "il modello non ha prodotto un'azione JSON valida per 2 passi consecutivi";
-                }
-                continue;
-              }
-              consecutiveParseFailures = 0;
-
-              if (actionObj.action === "done") {
-                await write(`✅ [DONE] ${actionObj.summary || "(nessun riassunto fornito)"}\n`);
-                stopped = true;
-                stopReason = "l'agente ha dichiarato il task completo";
-                continue;
-              }
-
-              if (actionObj.action === "read_file") {
-                const relPath = String(actionObj.path || "");
-                const absPath = resolve(workspace, relPath);
-                if (absPath !== workspace && !absPath.startsWith(workspace + sep)) {
-                  await write(`🚫 Percorso rifiutato (fuori dal workspace): ${relPath}\n`);
-                  actionHistory.push(`[Passo ${step}] read_file(${relPath}) RIFIUTATO: fuori dal workspace.`);
-                  continue;
-                }
-                if (!existsSync(absPath)) {
-                  await write(`📄 read_file(${relPath}): file non trovato\n`);
-                  actionHistory.push(`[Passo ${step}] read_file(${relPath}): file non trovato sul disco.`);
-                  continue;
-                }
-                try {
-                  const content = readFileSync(absPath, "utf-8").slice(0, 4000);
-                  await write(`📄 read_file(${relPath}) — ${content.length} caratteri letti realmente dal disco\n`);
-                  actionHistory.push(`[Passo ${step}] read_file(${relPath}):\n${content}`);
-                } catch (e: any) {
-                  await write(`📄 read_file(${relPath}) fallita: ${e.message}\n`);
-                  actionHistory.push(`[Passo ${step}] read_file(${relPath}) fallita: ${e.message}`);
-                }
-                continue;
-              }
-
-              if (actionObj.action === "write_file") {
-                const relPath = String(actionObj.path || "");
-                const newContent = String(actionObj.content ?? "");
-                const absPath = resolve(workspace, relPath);
-                if (absPath !== workspace && !absPath.startsWith(workspace + sep)) {
-                  await write(`🚫 Scrittura rifiutata (fuori dal workspace): ${relPath}\n`);
-                  actionHistory.push(`[Passo ${step}] write_file(${relPath}) RIFIUTATO: fuori dal workspace.`);
-                  continue;
-                }
-                if (filesWritten >= MAX_WRITES) {
-                  await write(`🚫 Limite di ${MAX_WRITES} scritture per loop raggiunto, scrittura rifiutata: ${relPath}\n`);
-                  actionHistory.push(`[Passo ${step}] write_file(${relPath}) RIFIUTATO: limite scritture raggiunto.`);
-                  continue;
-                }
-                try {
-                  const oldContent = existsSync(absPath) ? readFileSync(absPath, "utf-8") : "";
-                  const patch = Diff.createTwoFilesPatch(relPath, relPath, oldContent, newContent, "prima", "dopo");
-                  const parentDir = dirname(absPath);
-                  if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
-                  writeFileSync(absPath, newContent, "utf-8");
-                  filesWritten++;
-                  await write(`✏️ write_file(${relPath}) — scritto realmente su disco (${newContent.length} byte)\n${patch.split("\n").slice(0, 25).join("\n")}\n`);
-                  actionHistory.push(`[Passo ${step}] write_file(${relPath}): scritto realmente (${newContent.length} byte). Motivo: ${actionObj.reason || "(non specificato)"}`);
-                } catch (e: any) {
-                  await write(`✏️ write_file(${relPath}) fallita: ${e.message}\n`);
-                  actionHistory.push(`[Passo ${step}] write_file(${relPath}) fallita: ${e.message}`);
-                }
-                continue;
-              }
-
-              if (actionObj.action === "run_test") {
-                if (!testCommand) {
-                  await write(`🧪 run_test rifiutata: nessun comando di test configurato per questo loop.\n`);
-                  actionHistory.push(`[Passo ${step}] run_test RIFIUTATO: nessun testCommand configurato.`);
-                  continue;
-                }
-                await write(`🧪 run_test: eseguo realmente "${testCommand}"...\n`);
-                try {
-                  const proc = Bun.spawn(["bash", "-c", testCommand], { cwd: workspace, stdout: "pipe", stderr: "pipe" });
-                  const [outStr, errStr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-                  const exitCode = await proc.exited;
-                  const combined = (outStr + "\n" + errStr).slice(0, 2000);
-                  await write(`   exit code reale: ${exitCode}\n${combined}\n`);
-                  actionHistory.push(`[Passo ${step}] run_test("${testCommand}") exit=${exitCode}:\n${combined}`);
-                } catch (e: any) {
-                  await write(`🧪 run_test fallita: ${e.message}\n`);
-                  actionHistory.push(`[Passo ${step}] run_test fallita: ${e.message}`);
-                }
-                continue;
-              }
-
-              await write(`⚠️ Azione sconosciuta: "${actionObj.action}"\n`);
-              actionHistory.push(`[Passo ${step}] Azione sconosciuta "${actionObj.action}" ignorata.`);
-            }
-
-            if (!stopReason) stopReason = `raggiunto il limite di ${maxSteps} passi — il task potrebbe non essere completo`;
-
-            await saveProjectInsight(
-              workspace,
-              task.slice(0, 35),
-              `Loop agentico autonomo eseguito (${filesWritten} file scritti realmente sul disco). Terminato perché: ${stopReason}.`,
-              ["autonomous-loop"]
-            );
-
-            await write(`\n════════════════════════════════════════════════════════════════\n🏁 [LOOP TERMINATO] ${stopReason} — file scritti realmente: ${filesWritten}\n`);
-            try { await writer.close(); } catch {}
-          })();
-
-          return new Response(readable, {
-            headers: { "Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" }
-          });
-        } catch (e: any) {
-          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
-        }
+        return handleAgentAutonomousLoop(req, { activeModel, attachedWorkspacePath, keys: currentProviderKeys(), server });
       }
 
       // 11. Stop Agent Task
+      // Nota: nessuno dei 4 flussi agentici (run/autodebug/autonomous-loop/
+      // ensemble) assegna un processo reale da poter interrompere qui —
+      // era dead code (currentAgentProcess restava sempre null). Rimosso
+      // durante l'estrazione di agent/* (ROADMAP.md, Fase 1, step 8).
       if (url.pathname === "/api/agent/stop" && req.method === "POST") {
-        if (currentAgentProcess) {
-          try { currentAgentProcess.kill(); } catch {}
-          currentAgentProcess = null;
-        }
         return new Response(JSON.stringify({ success: true }), { headers });
       }
 
