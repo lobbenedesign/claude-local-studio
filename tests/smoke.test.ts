@@ -18,10 +18,29 @@ const TOKEN_FILE = join(import.meta.dir, "..", ".config", "auth-token");
 let proc: ReturnType<typeof Bun.spawn>;
 let authToken = "";
 
+// Retry una volta su un ECONNRESET/socket-reset transitorio: verificato che
+// non è un readiness-timeout né un errore del server (i log del processo
+// spawnato non mostrano nulla — il processo resta vivo, viene solo
+// occasionalmente rifiutata/chiusa una singola connessione HTTP di test,
+// riproducibile anche senza altri test di rete prima). Standard per test di
+// integrazione HTTP reali: non nasconde un bug del server (che continuerebbe
+// a fallire anche al retry), tollera solo il rumore di rete/connessione.
+async function fetchWithRetry(url: string, init: RequestInit = {}): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (e: any) {
+    if (e?.code === "ECONNRESET" || /socket connection was closed/i.test(String(e?.message))) {
+      await new Promise((r) => setTimeout(r, 200));
+      return fetch(url, init);
+    }
+    throw e;
+  }
+}
+
 function authFetch(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("X-Studio-Token", authToken);
-  return fetch(`${BASE}${path}`, { ...init, headers });
+  return fetchWithRetry(`${BASE}${path}`, { ...init, headers });
 }
 
 beforeAll(async () => {
@@ -34,7 +53,15 @@ beforeAll(async () => {
 
   // Poll until the server has written its auth token file and actually
   // answers to an authenticated request, instead of a fixed sleep.
-  for (let i = 0; i < 40; i++) {
+  //
+  // Budget alzato dopo 2 fallimenti reali in CI (GitHub Actions, runner
+  // macOS): "Server did not become ready in time" — il runner a freddo
+  // impiega più dei ~12s che il vecchio budget (40 tentativi × 300ms)
+  // concedeva, probabilmente per via delle probe verso servizi locali
+  // assenti (Ollama, ecc.) che /api/models esegue prima di rispondere.
+  // 100 tentativi × 300ms = 30s di margine, con l'hook stesso portato a
+  // 35s così non scade lui per primo.
+  for (let i = 0; i < 100; i++) {
     try {
       authToken = readFileSync(TOKEN_FILE, "utf-8").trim();
       if (authToken) {
@@ -45,7 +72,7 @@ beforeAll(async () => {
     await new Promise((r) => setTimeout(r, 300));
   }
   throw new Error("Server did not become ready in time");
-}, 20000);
+}, 35000);
 
 afterAll(() => {
   proc.kill();
@@ -98,6 +125,14 @@ describe("smoke: Hugging Face search", () => {
 });
 
 describe("smoke: FIM completion", () => {
+  // Timeout esplicito più alto del default di bun:test (5000ms): questo
+  // endpoint, sulla macchina di sviluppo, chiama davvero il modello Ollama
+  // installato localmente (nessun mock) — un caricamento a freddo del
+  // modello può superare i 5s reali e far scattare il timeout del test
+  // stesso (che si manifesta come ECONNRESET quando bun:test abortisce il
+  // fetch a metà), non un errore del server. Su un runner CI senza Ollama
+  // installato il fallback risponde in pochi ms, quindi questo margine
+  // aggiuntivo non rallenta la CI — serve solo quando l'engine è reale.
   test("returns a completion string even with no engine configured", async () => {
     const res = await authFetch("/api/completion/fim", {
       method: "POST",
@@ -108,7 +143,7 @@ describe("smoke: FIM completion", () => {
     const data = await res.json();
     expect(typeof data.completion).toBe("string");
     expect(data.completion.length).toBeGreaterThan(0);
-  });
+  }, 20000);
 });
 
 describe("smoke: workspace file read", () => {

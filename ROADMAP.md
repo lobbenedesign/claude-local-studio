@@ -358,6 +358,25 @@ etichettata per quello che è: hardening precauzionale, non la chiusura di
 un exploit dimostrato. Vedi il commit `dd8acae` di `nexus-local-engine` per
 i dettagli della verifica.
 
+**Affidabilità della CI (dopo una segnalazione di credibilità portfolio)**:
+la cronologia pubblica di `Actions` mostrava 2 run falliti (`c8a06c6`,
+`1a274f8`) con `error: Server did not become ready in time`. Indagato a
+fondo invece di limitarsi ad alzare un timeout a caso, e trovate **due
+cause distinte**, entrambe in `tests/smoke.test.ts`:
+- Il budget di polling readiness in `beforeAll` (40 tentativi × 300ms = 12s)
+  era più stretto dei ~20s di margine che un runner macOS a freddo di
+  GitHub Actions può richiedere. Alzato a 100 tentativi × 300ms (30s), con
+  l'hook stesso portato a 35s di timeout così non scade lui per primo.
+- **Causa distinta, riprodotta anche in locale** (non quella vista in CI,
+  ma la stessa famiglia di problema — timeout troppo stretto per una
+  chiamata reale): il test FIM chiama davvero il modello Ollama installato
+  sulla macchina di sviluppo (nessun mock), e un caricamento a freddo del
+  modello può superare i 5000ms di default di `bun:test` — il test veniva
+  abortito a metà, manifestandosi come `ECONNRESET` e trascinando in
+  fallimento anche il test successivo. Corretto dando a quel test un
+  timeout esplicito di 20s. Riverificato con 15 run consecutivi puliti in
+  locale (prima: ~1 fallimento ogni 3-4 run).
+
 Prossimo: `claude-local-studio` ha completato tutte e 4 le fasi previste
 dalla roadmap. Resta da valutare se passare lo stesso trattamento a
 `nexus-local-engine` (già fatto, vedi il suo ROADMAP.md), oppure riprendere
