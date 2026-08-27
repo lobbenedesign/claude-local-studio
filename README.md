@@ -10,7 +10,20 @@
 > **The universal, privacy-first Web Studio & Dev Server for Claude Code, a sequential 3-role agent pipeline (Ruflo-style, with a real multi-provider mode), a real multi-language AST repo symbol map (TypeScript Compiler API + tree-sitter for Python/Rust/Go/Java/C/C++, Aider-style, with regex fallback only for the rest), Visual Architecture Diagrams (MetaGPT), and 20+ Local & Cloud AI Providers.**
 > *L'interfaccia Web & Server di sviluppo universale per Claude Code, una pipeline sequenziale a 3 ruoli (stile Ruflo, con una modalità multi-provider reale), una mappa dei simboli con AST reale multi-linguaggio (TypeScript Compiler API + tree-sitter per Python/Rust/Go/Java/C/C++, stile Aider, con fallback a regex solo per il resto), MetaGPT e 20+ Provider di Intelligenza Artificiale.*
 
-![Claude Studio Dashboard](./public/screenshot.jpg)
+![Claude Studio Dashboard](./assets/screenshots/01-terminal-agent.png)
+
+### 🖼️ Screenshots (real UI, captured live from a running instance)
+
+| | |
+|---|---|
+| **Terminal & Agent** — chat principale, workspace attivo, comandi rapidi | **Model Hub & Free Providers** — ricerca Hugging Face, catalogo Cerebras/HF Router |
+| ![Terminal & Agent](./assets/screenshots/01-terminal-agent.png) | ![Model Hub](./assets/screenshots/02-model-hub.png) |
+| **File Tree & Code Diff** — esplora e visualizza il codice sorgente reale | **Telemetry & Savings** — token elaborati, risparmio stimato, velocità |
+| ![File Tree & Diff](./assets/screenshots/03-file-tree-diff.png) | ![Telemetry](./assets/screenshots/04-telemetry.png) |
+| **API Keys & Free Providers** — gestione centralizzata di 16+ chiavi | **Dev Servers (cmux)** — multiplexer processi di sviluppo in background |
+| ![API Keys](./assets/screenshots/05-api-keys.png) | ![Dev Servers](./assets/screenshots/06-dev-servers.png) |
+| **MCP Servers Hub** — marketplace Model Context Protocol (GitHub, DB, browser, Slack...) | |
+| ![MCP Hub](./assets/screenshots/07-mcp-hub.png) | |
 
 ---
 
@@ -78,6 +91,18 @@
 * After a normal chat response finishes streaming, the client scans the completed text for short ```bash/```sh/```shell fenced code blocks the model suggested and adds a real, clickable "▶️ Esegui" button next to each one (skipped for anything longer than 5 lines, to avoid offering to "run" a whole script blindly). Clicking it opens a native `confirm()` dialog showing the exact command before it reaches the terminal endpoint — closing the loop on "the agent can propose a command during the conversation, but only runs it with your confirmation," the way Cursor/Cline/Aider's terminal tool works.
 * Verified live in the browser: a real `echo ... && whoami` typed into the Terminal panel returned the real exit code and real output (including the actual macOS username); a synthetic assistant response containing a ` ```bash\nnpm install lodash\n``` ` block was correctly detected and rendered as a real, clickable suggestion.
 
+### 🗂️ The 7 Studio Tabs
+
+| Tab | What it actually does |
+| :--- | :--- |
+| **Terminal & Agent** | Main chat with the active model, workspace file tree, active-project stats (file count, project rules, AST symbol count), quick slash-command shortcuts, one-click links to open the workspace in Cursor/VS Code. |
+| **Model Hub & Free Providers** | Hugging Face GGUF search + one-click `ollama pull hf.co/...`, live-detected Cerebras/HF-Router model catalogs (only shows models actually available on your account), and every other free-tier provider card. |
+| **File Tree & Code Diff** | Read-only source browser with real syntax highlighting for the attached workspace; per-file actions (Test/Doc/Refactor generation, open in Cursor/VS Code). |
+| **Telemetry & Savings** | Live counters: total tokens processed this session, estimated € saved vs. commercial APIs, real inference tok/s, session uptime. |
+| **API Keys & Free Providers** | Centralized form for all 16+ provider API keys (Cerebras, HF, SambaNova, Mistral, Groq, OpenRouter, Gemini, OpenAI, Anthropic, DeepSeek, xAI, Kimi, Qwen, GLM, Perplexity, Together, Fireworks, Cohere), each with a direct "get a free key" link and live status badge. |
+| **Dev Servers (cmux)** | Background process multiplexer: launch and stream logs from multiple dev servers (`npm run dev`, `bun dev`, `python app.py`, the Ruflo daemon, etc.) without blocking the chat. |
+| **MCP Servers Hub** | Model Context Protocol marketplace: toggle and configure GitHub, PostgreSQL/Supabase, SQLite/DuckDB, Playwright/Puppeteer, Brave Search, Notion, Linear/Jira, Slack/Discord, Docker, Figma and local AgentDB memory servers, exportable straight to Cursor's or Claude Code's own MCP config. |
+
 ### 🚀 The 19 Specialized Slash Commands
 
 | Slash Command | Role & Specialization |
@@ -109,7 +134,13 @@ cd claude-local-studio
 bun install
 bun server.ts
 ```
-Open **`http://localhost:3001`** in your browser.
+Open the URL printed in the console (`http://localhost:3001/?token=...`) — the token is required on first visit, then a local cookie remembers you.
+
+**macOS app bundle** (no terminal, no Bun install needed for end users):
+```bash
+bun run package:macos
+```
+Produces `dist/Claude Local Studio.app` and `dist/Claude-Local-Studio-<version>.dmg` — double-click to run, the launcher opens your default browser on the already-authenticated URL.
 
 ---
 
@@ -171,6 +202,18 @@ Open **`http://localhost:3001`** in your browser.
 * Dopo che una normale risposta in chat finisce lo streaming, il client analizza il testo completato cercando brevi blocchi di codice ```bash/```sh/```shell suggeriti dal modello e aggiunge un vero pulsante cliccabile "▶️ Esegui" accanto a ciascuno (ignorati quelli più lunghi di 5 righe, per non offrire di "eseguire" alla cieca uno script intero). Cliccandolo si apre una finestra `confirm()` nativa che mostra il comando esatto prima che raggiunga l'endpoint del terminale — chiudendo il cerchio su "l'agente può proporre un comando durante la conversazione, ma lo esegue solo con la tua conferma", esattamente come funziona lo strumento terminale di Cursor/Cline/Aider.
 * Verificato dal vivo nel browser: un vero `echo ... && whoami` digitato nel pannello Terminale ha restituito il vero exit code e il vero output (incluso il reale username macOS); una risposta assistente sintetica contenente un blocco ` ```bash\nnpm install lodash\n``` ` è stata correttamente rilevata e mostrata come suggerimento reale cliccabile.
 
+### 🗂️ Le 7 Tab dello Studio
+
+| Tab | Cosa fa realmente |
+| :--- | :--- |
+| **Terminal & Agent** | Chat principale col modello attivo, albero dei file del workspace, statistiche del progetto attivo (numero file, regole di progetto, simboli AST), scorciatoie rapide per gli slash-command, link diretti per aprire il workspace in Cursor/VS Code. |
+| **Model Hub & Free Providers** | Ricerca GGUF su Hugging Face + pull con un click via `ollama pull hf.co/...`, cataloghi Cerebras/HF Router rilevati dal vivo (mostra solo i modelli davvero disponibili sul tuo account), e le card di ogni altro provider free-tier. |
+| **File Tree & Code Diff** | Browser sorgenti in sola lettura con syntax highlighting reale sul workspace attaccato; azioni per file (generazione Test/Doc/Refactor, apertura in Cursor/VS Code). |
+| **Telemetry & Savings** | Contatori live: token totali elaborati nella sessione, risparmio stimato in € rispetto alle API commerciali, velocità di inferenza reale in tok/s, tempo di sessione. |
+| **API Keys & Free Providers** | Form centralizzato per tutte le 16+ chiavi API dei provider (Cerebras, HF, SambaNova, Mistral, Groq, OpenRouter, Gemini, OpenAI, Anthropic, DeepSeek, xAI, Kimi, Qwen, GLM, Perplexity, Together, Fireworks, Cohere), ognuna con link diretto per ottenere una chiave gratuita e badge di stato live. |
+| **Dev Servers (cmux)** | Multiplexer di processi in background: avvia e segui i log di più server di sviluppo (`npm run dev`, `bun dev`, `python app.py`, il daemon Ruflo, ecc.) senza bloccare la chat. |
+| **MCP Servers Hub** | Marketplace Model Context Protocol: attiva e configura server GitHub, PostgreSQL/Supabase, SQLite/DuckDB, Playwright/Puppeteer, Brave Search, Notion, Linear/Jira, Slack/Discord, Docker, Figma e la memoria locale AgentDB, esportabili direttamente nella configurazione MCP di Cursor o Claude Code. |
+
 ### 🛠️ Avvio Rapido
 ```bash
 git clone https://github.com/lobbenedesign/claude-local-studio.git
@@ -178,7 +221,13 @@ cd claude-local-studio
 bun install
 bun server.ts
 ```
-Apri il browser su **`http://localhost:3001`**.
+Apri l'URL stampato in console (`http://localhost:3001/?token=...`) — il token serve solo alla prima visita, poi un cookie locale ti ricorda.
+
+**App macOS impacchettata** (nessun terminale, nessuna installazione di Bun per l'utente finale):
+```bash
+bun run package:macos
+```
+Genera `dist/Claude Local Studio.app` e `dist/Claude-Local-Studio-<versione>.dmg` — doppio click per avviare, il launcher apre il browser di default già sull'URL autenticato.
 
 ---
 
