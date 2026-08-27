@@ -69,13 +69,32 @@ Ordine pianificato (per rischio crescente):
        e sia `read_file` che `write_file` reali su una workspace di scratch
        isolata, incluso il controllo dei confini del workspace
        (autonomous-loop.ts).
-9. [ ] `src/config/app-config.ts` — le ~20 variabili globali `let xxxApiKey`
-       diventano uno store centralizzato invece di variabili sciolte.
-10. [ ] `src/routes/index.ts` + `server.ts` finale ridotto a poche righe.
+9. [x] `src/config/app-config.ts` — `AppConfig`, `loadConfig`, `saveConfig`
+       estratti (trasloco puro, verificato che il file `.config/settings.json`
+       reale si legge/scrive ancora correttamente dopo il fix del path).
+       **Deciso di non fare**: consolidare le ~20 `let xxxApiKey` in un
+       oggetto unico. Con `server.ts` già sceso sotto le 1.600 righe, quel
+       refactor toccherebbe ogni punto di lettura in tutto il file (incluse
+       le shorthand `{ activeModel, ... }` già create negli step 7-8) per un
+       beneficio ormai puramente estetico — il rapporto rischio/valore non
+       lo giustifica più. Le variabili restano dichiarate in un blocco
+       contiguo e ben leggibile in cima a `server.ts`.
+10. [x] **Deciso di non fare** `src/routes/index.ts`. Il resto di `server.ts`
+        (bridge Telegram, folder picker nativo, tabella delle route, bootstrap
+        `Bun.serve`) usa tutti gli stessi ~25 pezzi di stato globale; spostarlo
+        in un file separato sposterebbe l'accoppiamento senza ridurlo (o
+        richiederebbe passare ~25 parametri/callback attraverso il confine).
+        `server.ts` a 1.521 righe, quasi tutto tabella di route che delega a
+        moduli già estratti, è una dimensione ragionevole per un entrypoint.
 
 `currentAgentProcess` (variabile globale per "stop agent") confermato
 codice morto — nessuno dei 4 flussi agentici lo assegnava mai. Rimosso
 insieme all'estrazione dello step 8, invece di trascinarlo oltre.
+
+**Fase 1 chiusa**: `server.ts` 4.721 → 1.521 righe (-68%), 20 moduli in
+`src/`. Gli step 9-10 sono stati chiusi con una decisione esplicita di NON
+fare il refactor pianificato quando il rischio/costo ha smesso di valerne la
+pena, invece di eseguirlo comunque solo per spuntare la checklist.
 
 ## Fase 2 — Sicurezza da prodotto reale
 
@@ -199,8 +218,12 @@ del progetto) che rendeva `/ruflo` inaffidabile — vedi sezione bug sopra.
 Rimosso anche `currentAgentProcess`, confermato codice morto (mai assegnato
 da nessuno dei 4 flussi).
 
-**Fase 1 sostanzialmente completa**: restano solo step 9 (config store —
-consolidare le ~20 `let xxxApiKey` sparse) e step 10 (routes finali +
-`server.ts` ridotto a poche righe di bootstrap). Da qui in poi conviene
-valutare se procedere con questi due step di rifinitura o passare alla Fase 2
-(sicurezza). Aggiornare le checkbox qui sopra ad ogni sessione futura.
+**Fase 1 chiusa**: `server.ts` **4.721 → 1.521 righe (-68%)**, 20 moduli in
+`src/`. Step 9 (`app-config.ts` estratto) e step 10 (route table lasciata in
+`server.ts`) chiusi con una scelta esplicita di fermarsi quando il refactor
+pianificato smetteva di valere il rischio, invece di eseguirlo comunque per
+completezza formale — dettagli nelle rispettive voci sopra.
+
+Prossimo: **Fase 2 — sicurezza da prodotto reale** (autenticazione locale,
+CORS ristretto, protezione chiavi API salvate su disco, hardening di
+`/api/workspace/terminal/exec`).

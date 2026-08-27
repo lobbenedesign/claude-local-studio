@@ -50,101 +50,10 @@ import { getConfiguredEnsembleCandidates, callEnsembleCandidateNonStreaming } fr
 import { handleAgentRun } from "./src/agent/run";
 import { handleAgentAutodebug } from "./src/agent/autodebug";
 import { handleAgentAutonomousLoop } from "./src/agent/autonomous-loop";
+import { loadConfig, saveConfig, CONFIG_FILE, type AppConfig } from "./src/config/app-config";
 
 const PORT = Number(process.env.PORT) || 3001;
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
-
-// Persistent Configuration Path (Saved locally in workspace or user home)
-const CONFIG_DIR = join(import.meta.dir, ".config");
-const CONFIG_FILE = join(CONFIG_DIR, "settings.json");
-
-interface AppConfig {
-  activeModel: string;
-  attachedWorkspacePath: string;
-  geminiApiKey: string;
-  groqApiKey: string;
-  openrouterApiKey: string;
-  cerebrasApiKey: string;
-  hfApiKey: string;
-  sambanovaApiKey: string;
-  mistralApiKey: string;
-  openaiApiKey: string;
-  anthropicApiKey: string;
-  deepseekApiKey: string;
-  xaiApiKey: string;
-  togetherApiKey: string;
-  fireworksApiKey: string;
-  cohereApiKey: string;
-  replicateApiKey: string;
-  kimiApiKey: string;
-  qwenApiKey: string;
-  glmApiKey: string;
-  perplexityApiKey: string;
-  customApiEndpoint: string;
-  customApiKey: string;
-  telegramBotToken: string;
-  telegramAllowedChatId: string;
-  telegramEnabled: boolean;
-}
-
-// Load Persistent Config
-function loadConfig(): AppConfig {
-  const defaultConfig: AppConfig = {
-    activeModel: "qwen2.5:7b",
-    attachedWorkspacePath: resolve(join(import.meta.dir, "..")),
-    geminiApiKey: process.env.GEMINI_API_KEY || "",
-    groqApiKey: process.env.GROQ_API_KEY || "",
-    openrouterApiKey: process.env.OPENROUTER_API_KEY || "",
-    cerebrasApiKey: process.env.CEREBRAS_API_KEY || "",
-    hfApiKey: process.env.HF_TOKEN || process.env.HUGGINGFACE_API_KEY || "",
-    sambanovaApiKey: process.env.SAMBANOVA_API_KEY || "",
-    mistralApiKey: process.env.MISTRAL_API_KEY || "",
-    openaiApiKey: process.env.OPENAI_API_KEY || "",
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
-    deepseekApiKey: process.env.DEEPSEEK_API_KEY || "",
-    xaiApiKey: process.env.XAI_API_KEY || "",
-    togetherApiKey: process.env.TOGETHER_API_KEY || "",
-    fireworksApiKey: process.env.FIREWORKS_API_KEY || "",
-    cohereApiKey: process.env.COHERE_API_KEY || "",
-    replicateApiKey: process.env.REPLICATE_API_KEY || "",
-    kimiApiKey: process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY || "",
-    qwenApiKey: process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || "",
-    glmApiKey: process.env.GLM_API_KEY || process.env.ZHIPU_API_KEY || "",
-    perplexityApiKey: process.env.PERPLEXITY_API_KEY || "",
-    customApiEndpoint: process.env.CUSTOM_API_ENDPOINT || "",
-    customApiKey: process.env.CUSTOM_API_KEY || "",
-    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
-    telegramAllowedChatId: process.env.TELEGRAM_CHAT_ID || "",
-    telegramEnabled: false
-  };
-
-  try {
-    if (existsSync(CONFIG_FILE)) {
-      const raw = readFileSync(CONFIG_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      return { ...defaultConfig, ...parsed };
-    }
-  } catch (e) {
-    console.error("Error reading settings.json:", e);
-  }
-  return defaultConfig;
-}
-
-// Save Persistent Config
-function saveConfig(cfg: Partial<AppConfig>) {
-  try {
-    if (!existsSync(CONFIG_DIR)) {
-      mkdirSync(CONFIG_DIR, { recursive: true });
-    }
-    const current = loadConfig();
-    const updated = { ...current, ...cfg };
-    writeFileSync(CONFIG_FILE, JSON.stringify(updated, null, 2), "utf-8");
-    return updated;
-  } catch (e) {
-    console.error("Error saving settings.json:", e);
-    return loadConfig();
-  }
-}
 
 // Initialize State from Saved Config
 const initialConfig = loadConfig();
