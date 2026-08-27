@@ -1112,8 +1112,35 @@ async function fetchModels() {
     renderOpenAIModels();
     updateActiveModelUI();
     updateKeyBadges();
+    updateOnboardingBanner(data);
   } catch (err) {
     console.error("Error fetching models:", err);
+  }
+}
+
+// Onboarding (Fase 3): prima di questo, un utente senza Ollama installato e
+// senza chiavi API configurate vedeva solo errori criptici nelle singole
+// feature (chat, FIM, ecc.), senza capire perché nulla funzionasse.
+function updateOnboardingBanner(data) {
+  const banner = document.getElementById("onboarding-banner");
+  const messageEl = document.getElementById("onboarding-message");
+  if (!banner || !messageEl) return;
+
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem("onboarding-dismissed") === "1"; } catch {}
+  if (dismissed) { banner.style.display = "none"; return; }
+
+  const hasLocalModels = Array.isArray(data.localModels) && data.localModels.length > 0;
+  const hasAnyCloudKey = Object.values(data.apiKeysStatus || {}).some(v => v === true);
+
+  if (!data.ollamaOnline && !hasLocalModels && !hasAnyCloudKey) {
+    messageEl.innerHTML = `Ollama non risulta installato/avviato e nessuna chiave API cloud è configurata: chat, FIM e agenti non funzioneranno. Installa <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> e scarica un modello dalla tab "Model Hub", oppure aggiungi una chiave gratuita (es. Cerebras, Groq) nella tab "API Keys & Free Providers".`;
+    banner.style.display = "flex";
+  } else if (!data.ollamaOnline && !hasLocalModels && hasAnyCloudKey) {
+    messageEl.innerHTML = `Ollama non risulta installato/avviato: le feature che richiedono un motore locale (FIM, indicizzazione codebase) non funzioneranno, ma i provider cloud configurati sono utilizzabili per la chat.`;
+    banner.style.display = "flex";
+  } else {
+    banner.style.display = "none";
   }
 }
 
@@ -1807,6 +1834,15 @@ function initEventListeners() {
       customModelInput.value = "";
     }
   });
+
+  const btnDismissOnboarding = document.getElementById("btn-dismiss-onboarding");
+  if (btnDismissOnboarding) {
+    btnDismissOnboarding.addEventListener("click", () => {
+      try { sessionStorage.setItem("onboarding-dismissed", "1"); } catch {}
+      const banner = document.getElementById("onboarding-banner");
+      if (banner) banner.style.display = "none";
+    });
+  }
 
   if (btnHfSearch) btnHfSearch.addEventListener("click", searchHuggingFace);
   if (hfSearchInput) hfSearchInput.addEventListener("keydown", (e) => { if (e.key === "Enter") searchHuggingFace(); });

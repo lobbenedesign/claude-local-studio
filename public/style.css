@@ -233,6 +233,33 @@ body {
   border-radius: 4px 4px 0 0;
 }
 
+/* Onboarding banner (Fase 3): nessun motore AI locale/cloud raggiungibile */
+.onboarding-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(234, 179, 8, 0.12);
+  border-bottom: 1px solid rgba(234, 179, 8, 0.4);
+  font-size: 0.85rem;
+}
+.onboarding-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+.onboarding-text {
+  flex: 1;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.onboarding-text strong {
+  color: #eab308;
+  margin-right: 6px;
+}
+.onboarding-text a {
+  color: var(--terracotta);
+}
+
 /* Main Area */
 .app-main {
   flex: 1;

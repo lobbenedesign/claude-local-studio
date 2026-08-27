@@ -135,11 +135,28 @@ pena, invece di eseguirlo comunque solo per spuntare la checklist.
 
 ## Fase 3 — UX per utenti non tecnici
 
-- [ ] Onboarding alla prima apertura: rilevare motori offline (Ollama non
-      installato, nessuna chiave API) e spiegare cosa fare, non un errore
-      criptico.
-- [ ] Gestione errori uniforme: oggi molti endpoint fanno `catch {}` silenzioso.
-- [ ] Un vero launcher al posto di "apri il terminale e lancia `bun server.ts`".
+- [x] Onboarding alla prima apertura: banner in cima alla UI (visibile su
+      tutte le tab) se Ollama è offline/senza modelli installati e nessuna
+      chiave API cloud è configurata — spiega cosa fare (installare Ollama +
+      link, o aggiungere una chiave gratuita) invece di lasciare le singole
+      feature fallire in modo criptico. Verificato in browser reale:
+      compare/scompare correttamente in base allo stato reale di
+      `ollamaOnline`/`apiKeysStatus`, il pulsante "Ho capito" lo nasconde e
+      lo ricorda per la sessione (`sessionStorage`).
+- [x] Un vero launcher: **scoperto e corretto un regressione reale**
+      introdotta dalla Fase 2 — `start-macos.command`/`start-windows.bat`
+      aprivano il browser su `http://localhost:3001` senza il token, che ora
+      risponde 401. Corretti entrambi per aspettare la creazione del file
+      `.config/auth-token` e aprire l'URL con `?token=...` già incluso.
+      Verificato end-to-end lo script macOS (token letto correttamente,
+      URL costruito identico a quello stampato in console).
+- [ ] **Deciso di rimandare**: gestione errori uniforme (oggi molti endpoint
+      fanno `catch {}` silenzioso). Troppo diffuso e disomogeneo per un
+      intervento mirato di valore in questa sessione — molti `catch {}` sono
+      deliberatamente "best effort" (probe di motori opzionali, cache) e non
+      andrebbero resi tutti rumorosi allo stesso modo. Da affrontare caso per
+      caso quando si tocca quel codice per altri motivi, non come sweep
+      generico.
 
 ## Fase 4 — Packaging da app installabile
 
@@ -258,6 +275,12 @@ globale. CORS `*` lasciato invariato con motivazione esplicita (il cookie
 `SameSite=Lax` già neutralizza il rischio pratico di CSRF via `fetch`
 cross-site) — vedi dettagli sopra.
 
-Prossimo: **Fase 3 — UX per utenti non tecnici** o **Fase 4 — packaging**,
+**Fase 3 chiusa** (con un item deliberatamente rimandato): banner di
+onboarding quando nessun motore AI è raggiungibile, verificato in browser
+reale; launcher macOS/Windows corretti per la regressione introdotta dalla
+Fase 2 (aprivano un URL senza token, ora 401). Gestione errori uniforme
+rimandata — troppo diffusa per un intervento mirato di valore ora.
+
+Prossimo: **Fase 4 — packaging** (Tauri vs Electron, installer `.dmg`),
 oppure passare a `nexus-local-engine` (mai toccato finora in questa
 iniziativa).
