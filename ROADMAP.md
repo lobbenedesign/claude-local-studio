@@ -382,3 +382,71 @@ dalla roadmap. Resta da valutare se passare lo stesso trattamento a
 `nexus-local-engine` (già fatto, vedi il suo ROADMAP.md), oppure riprendere
 item deliberatamente rimandati (CORS, gestione errori uniforme, route
 table).
+
+## Fuori roadmap — audit competitor e chiusura gap reali (sessione successiva)
+
+Ricerca reale su competitor (Cline, Cursor, Aider, Continue.dev — vedi fonti
+nei commit) per identificare funzionalità che questi hanno e
+`claude-local-studio` no, invece di inventare lavoro. Tre gap chiusi:
+
+- **Loop agentico autonomo multi-step** (`/agentloop`, `src/agent/autonomous-loop.ts`):
+  legge/scrive file reali e esegue test reali in sequenza senza un prompt
+  per passo, come Cursor Agent/Cline. Guardrail reali (contenimento nel
+  workspace, limite scritture, stop onesto su JSON non valido). Verificato
+  end-to-end su una fixture reale (funzione mancante `add(a,b)`, test
+  `node` reale passato dopo la scrittura).
+- **Esecuzione reale di comandi terminale** (`/terminal`,
+  `src/workspace/terminal.ts`): sempre con conferma esplicita dell'utente,
+  mai automatica — anche quando l'agente suggerisce un comando in chat.
+- **Checkpoints & Rollback** (`/checkpoints`, `src/agent/checkpoints.ts`):
+  gap rispetto a Cline, che salva uno snapshot del workspace ad ogni azione
+  e permette il rollback a un punto qualsiasi della sessione. Ogni
+  `write_file` del loop agentico ora salva un checkpoint reale prima di
+  scrivere, persistito su `<workspace>/.claude/checkpoints/<runId>.json`;
+  il ripristino annulla realmente sul disco tutte le scritture da un passo
+  in poi. Verificato sia a livello di modulo (fixture isolata, senza LLM)
+  sia via il vero endpoint HTTP con autenticazione reale.
+
+**Due bug reali trovati e corretti durante questo lavoro, non preesistenti
+alla sessione in cui sono stati introdotti:**
+- **Persistenza del workspace rotta ad ogni reload della pagina**
+  (`public/app.js`): `attachedWorkspacePath` aveva un valore di default
+  hardcoded (un percorso specifico della macchina di sviluppo originale), e
+  `DOMContentLoaded` lo rispediva al server via `attachWorkspace()` ad ogni
+  caricamento pagina — sovrascrivendo silenziosamente qualunque workspace
+  l'utente avesse realmente salvato in precedenza. Scoperto mentre si
+  preparava uno screenshot reale per questo stesso README: il workspace
+  attaccato via API tornava al valore sbagliato ad ogni reload del
+  browser. Corretto facendo caricare al client, all'avvio, il workspace
+  realmente salvato lato server (nessun path forzato), e facendo sincronizzare
+  `attachedWorkspacePath` sul valore confermato dalla risposta del server
+  invece che sull'argomento passato alla funzione. Riverificato con reload
+  multipli consecutivi nel browser reale.
+- **Toggle dei passi checkpoint sempre "aperto"** (`public/app.js`): una
+  proprietà CSS `display` duplicata nell'HTML generato (`display: none;
+  ... display: flex;` nella stessa stringa di stile) faceva partire il
+  pannello dei passi già visivamente aperto ma vuoto, così il primo click
+  su "Vedi passi" lo chiudeva subito invece di popolarlo. Scoperto
+  catturando lo screenshot reale della funzionalità e notando il pannello
+  vuoto invece che espanso. Corretto e riverificato con screenshot.
+
+Tutti gli screenshot di queste tre funzionalità in questo README sono reali,
+catturati con Chrome headless reale (via `puppeteer-core`, connesso al
+Chrome già installato sulla macchina, non un Chromium scaricato a parte)
+pilotato contro un'istanza reale del server su una fixture di progetto
+dedicata — non mockup, non disegni.
+
+**Verificato ma deliberatamente non implementato ora: MCP a runtime.**
+`src/integrations/mcp.ts` dichiara già onestamente nel proprio commento
+("Solo gestione di configurazione/export JSON — non avvia processi MCP
+reali né li interroga") di essere un registry/exporter, non un client MCP
+reale — e il README lo descrive coerentemente come "marketplace"
+attivabile/esportabile verso Cursor o Claude Code, mai come "questo studio
+usa gli strumenti MCP nelle conversazioni". Cline/Cursor/Continue.dev
+invece si connettono davvero ai server MCP (stdio/SSE) e ne usano gli
+strumenti dentro il loop dell'agente: è un gap reale, ma implementarlo bene
+richiede un vero client JSON-RPC su stdio, gestione del ciclo di vita dei
+processi figli, e l'iniezione dei tool MCP nel loop `/agentloop` esistente
+— lavoro sostanziale, non una correzione mirata. Rimandato deliberatamente
+invece di fare un'implementazione parziale rischiosa a fine sessione;
+nessun claim nel codice o nel README lo rappresenta come già fatto.

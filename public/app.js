@@ -23,7 +23,12 @@ let openaiModels = [];
 let isPulling = false;
 let socket = null;
 let currentAgentRunning = false;
-let attachedWorkspacePath = "/Users/giuseppelobbene/Desktop/APP PYTHON - FLUTTER ARCHIVE/LLM";
+// Placeholder only: overwritten on page load by the server's actually saved
+// workspace (see DOMContentLoaded below). Never sent to the server as-is —
+// a real bug fixed here previously made every page reload silently discard
+// the user's saved workspace by POSTing this hardcoded path back to
+// /api/workspace/attach, which then persisted it over the real saved value.
+let attachedWorkspacePath = "";
 
 // DOM Elements
 const quickModelSelect = document.getElementById("quick-model-select");
@@ -174,6 +179,14 @@ const inputTerminalCmd = document.getElementById("input-terminal-cmd");
 const btnRunTerminalCmd = document.getElementById("btn-run-terminal-cmd");
 const terminalOutput = document.getElementById("terminal-output");
 
+// Checkpoints & Rollback Modal Elements
+const btnOpenCheckpoints = document.getElementById("btn-open-checkpoints");
+const checkpointsModal = document.getElementById("checkpoints-modal");
+const btnCloseCheckpointsModal = document.getElementById("btn-close-checkpoints-modal");
+const btnCloseCheckpointsModal2 = document.getElementById("btn-close-checkpoints-modal-2");
+const btnRefreshCheckpoints = document.getElementById("btn-refresh-checkpoints");
+const checkpointsRunsList = document.getElementById("checkpoints-runs-list");
+
 // CMUX Process Multiplexer Elements
 const cmuxProcessList = document.getElementById("cmux-process-list");
 const cmuxCurrentStatusBadge = document.getElementById("cmux-current-status-badge");
@@ -218,7 +231,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initWebSocket();
   fetchModels();
-  attachWorkspace(attachedWorkspacePath);
+  attachWorkspace(); // nessun path: carica il workspace realmente salvato lato server
   fetchCmuxProcesses();
   fetchTelegramStatus();
   fetchStats();
@@ -324,17 +337,21 @@ function initWebSocket() {
   };
 }
 
-// Attach & Inspect Workspace
+// Attach & Inspect Workspace. Call with no argument to load whatever the
+// server already has saved (used on page load) instead of forcing a path.
 async function attachWorkspace(path) {
   try {
     const res = await fetch("/api/workspace/attach", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path })
+      body: JSON.stringify(path ? { path } : {})
     });
     const data = await res.json();
     if (data.success && data.context) {
-      attachedWorkspacePath = path;
+      // Usa il percorso reale confermato dal server (data.context.fullPath),
+      // non l'argomento passato: se `path` era omesso (caricamento pagina),
+      // il server ha usato il proprio stato salvato, e va sincronizzato qui.
+      attachedWorkspacePath = data.context.fullPath || path;
       renderWorkspaceContext(data.context);
     }
   } catch (err) {
@@ -624,6 +641,100 @@ async function runTerminalCommand(command) {
     if (terminalOutput) terminalOutput.textContent = `$ ${command}\n\n❌ Errore di connessione: ${err.message}`;
   } finally {
     if (btnRunTerminalCmd) btnRunTerminalCmd.disabled = false;
+  }
+}
+
+// Open Checkpoints & Rollback Modal and load real runs from disk
+window.openCheckpointsModal = function() {
+  if (checkpointsModal) checkpointsModal.style.display = "flex";
+  loadCheckpointRuns();
+};
+
+async function loadCheckpointRuns() {
+  if (!checkpointsRunsList) return;
+  checkpointsRunsList.innerHTML = `<div class="tree-loading">Caricamento run...</div>`;
+  try {
+    const res = await fetch(`/api/agent/checkpoints/runs?workspace=${encodeURIComponent(attachedWorkspacePath)}`);
+    const data = await res.json();
+    const runs = data.runs || [];
+    if (runs.length === 0) {
+      checkpointsRunsList.innerHTML = `<div class="tree-loading">Nessuna run del Loop Agentico ha ancora salvato checkpoint per questo workspace.</div>`;
+      return;
+    }
+    checkpointsRunsList.innerHTML = "";
+    for (const run of runs) {
+      const card = document.createElement("div");
+      card.style.cssText = "border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px;";
+      card.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+          <div>
+            <div style="font-weight: 500; font-size: 13px;">${run.task}</div>
+            <div style="font-size: 11px; opacity: 0.7;">${new Date(run.startedAt).toLocaleString()} — ${run.numCheckpoints} checkpoint su ${run.filesTouched.length} file: ${run.filesTouched.join(", ")}</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" data-run-id="${run.runId}">Vedi passi</button>
+        </div>
+        <div class="checkpoint-steps" data-run-id="${run.runId}" style="display: none; margin-top: 8px; flex-direction: column; gap: 4px;"></div>
+      `;
+      const viewBtn = card.querySelector("button[data-run-id]");
+      viewBtn.addEventListener("click", () => toggleRunSteps(run.runId, card));
+      checkpointsRunsList.appendChild(card);
+    }
+  } catch (err) {
+    checkpointsRunsList.innerHTML = `<div class="tree-loading">❌ Errore caricamento: ${err.message}</div>`;
+  }
+}
+
+async function toggleRunSteps(runId, card) {
+  const stepsDiv = card.querySelector(`.checkpoint-steps[data-run-id="${runId}"]`);
+  if (!stepsDiv) return;
+  if (stepsDiv.style.display !== "none") {
+    stepsDiv.style.display = "none";
+    return;
+  }
+  stepsDiv.style.display = "flex";
+  stepsDiv.innerHTML = `<div class="tree-loading">Caricamento passi...</div>`;
+  try {
+    const res = await fetch(`/api/agent/checkpoints/run?workspace=${encodeURIComponent(attachedWorkspacePath)}&runId=${encodeURIComponent(runId)}`);
+    const run = await res.json();
+    if (!res.ok) {
+      stepsDiv.innerHTML = `<div class="tree-loading">❌ ${run.error}</div>`;
+      return;
+    }
+    stepsDiv.innerHTML = "";
+    for (const cp of run.checkpoints) {
+      const row = document.createElement("div");
+      row.style.cssText = "display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 4px 8px; background: rgba(255,255,255,0.03); border-radius: 4px;";
+      row.innerHTML = `<span>Passo ${cp.step}: <code>${cp.relPath}</code> ${cp.hadExisted ? "(modificato)" : "(nuovo file)"}</span>`;
+      const restoreBtn = document.createElement("button");
+      restoreBtn.className = "btn btn-secondary btn-sm";
+      restoreBtn.textContent = "↩️ Ripristina a qui";
+      restoreBtn.addEventListener("click", () => restoreCheckpoint(runId, cp.step));
+      row.appendChild(restoreBtn);
+      stepsDiv.appendChild(row);
+    }
+  } catch (err) {
+    stepsDiv.innerHTML = `<div class="tree-loading">❌ Errore: ${err.message}</div>`;
+  }
+}
+
+async function restoreCheckpoint(runId, uptoStep) {
+  if (!confirm(`Ripristinare realmente il workspace allo stato precedente al passo ${uptoStep}?\n\nQuesto annulla sul disco tutte le scritture fatte da quel passo in poi in questa run. L'azione non è reversibile da qui (ma puoi rifare il loop).`)) return;
+  try {
+    const res = await fetch("/api/agent/checkpoints/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace: attachedWorkspacePath, runId, uptoStep })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(`Ripristino fallito: ${data.error}`);
+      return;
+    }
+    const summary = data.restoredFiles.map(f => `${f.action === "restored" ? "↩️ ripristinato" : "🗑️ eliminato"}: ${f.relPath}`).join("\n") || "(nessun file da ripristinare)";
+    alert(`Ripristino completato realmente sul disco:\n\n${summary}`);
+    appendAgentOutput(`\n🕐 [CHECKPOINT RIPRISTINATO] run ${runId}, passo ${uptoStep}:\n${summary}\n`, false);
+  } catch (err) {
+    alert(`Errore di connessione durante il ripristino: ${err.message}`);
   }
 }
 
@@ -1943,6 +2054,17 @@ function initEventListeners() {
   if (terminalModal) {
     terminalModal.addEventListener("click", (e) => {
       if (e.target === terminalModal) terminalModal.style.display = "none";
+    });
+  }
+
+  // Checkpoints & Rollback Modal Actions
+  if (btnOpenCheckpoints) btnOpenCheckpoints.addEventListener("click", window.openCheckpointsModal);
+  if (btnCloseCheckpointsModal) btnCloseCheckpointsModal.addEventListener("click", () => checkpointsModal.style.display = "none");
+  if (btnCloseCheckpointsModal2) btnCloseCheckpointsModal2.addEventListener("click", () => checkpointsModal.style.display = "none");
+  if (btnRefreshCheckpoints) btnRefreshCheckpoints.addEventListener("click", loadCheckpointRuns);
+  if (checkpointsModal) {
+    checkpointsModal.addEventListener("click", (e) => {
+      if (e.target === checkpointsModal) checkpointsModal.style.display = "none";
     });
   }
 

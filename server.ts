@@ -50,6 +50,7 @@ import { getConfiguredEnsembleCandidates, callEnsembleCandidateNonStreaming } fr
 import { handleAgentRun } from "./src/agent/run";
 import { handleAgentAutodebug } from "./src/agent/autodebug";
 import { handleAgentAutonomousLoop } from "./src/agent/autonomous-loop";
+import { listRuns, getRun, restoreToCheckpoint } from "./src/agent/checkpoints";
 import { loadConfig, saveConfig, CONFIG_FILE, type AppConfig } from "./src/config/app-config";
 import { getOrCreateAuthToken, isRequestAuthorized, wasAuthorizedByQueryParam, authCookieHeader } from "./src/config/auth";
 import { PROJECT_ROOT, PUBLIC_DIR } from "./src/config/paths";
@@ -1337,6 +1338,39 @@ const server = Bun.serve({
       // si ferma onestamente invece di continuare a vuoto.
       if (url.pathname === "/api/agent/autonomous-loop" && req.method === "POST") {
         return handleAgentAutonomousLoop(req, { activeModel, attachedWorkspacePath, keys: currentProviderKeys(), server });
+      }
+
+      // 10c-bis. Checkpoints & Rollback per il Loop Agentico (gap reale vs Cline)
+      // ------------------------------------------------------
+      // Cline crea uno snapshot ad ogni azione dell'agente e permette di
+      // ripristinare l'intero workspace a un punto qualsiasi della sessione.
+      // Prima di questo, /agentloop mostrava un diff reale per ogni scrittura
+      // ma non c'era modo di tornare indietro se una scrittura successiva
+      // rompeva qualcosa. Vedi src/agent/checkpoints.ts.
+      if (url.pathname === "/api/agent/checkpoints/runs" && req.method === "GET") {
+        const workspace = resolve(url.searchParams.get("workspace") || attachedWorkspacePath);
+        return new Response(JSON.stringify({ runs: listRuns(workspace) }), { headers });
+      }
+
+      if (url.pathname === "/api/agent/checkpoints/run" && req.method === "GET") {
+        const workspace = resolve(url.searchParams.get("workspace") || attachedWorkspacePath);
+        const runId = url.searchParams.get("runId") || "";
+        const run = getRun(workspace, runId);
+        if (!run) return new Response(JSON.stringify({ error: `Run ${runId} non trovata` }), { status: 404, headers });
+        return new Response(JSON.stringify(run), { headers });
+      }
+
+      if (url.pathname === "/api/agent/checkpoints/restore" && req.method === "POST") {
+        try {
+          const body: any = await req.json();
+          const workspace = resolve(body.workspace || attachedWorkspacePath);
+          const runId: string = body.runId || "";
+          const uptoStep: number = Number(body.uptoStep) || 1;
+          const result = restoreToCheckpoint(workspace, runId, uptoStep);
+          return new Response(JSON.stringify(result), { headers });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+        }
       }
 
       // 11. Stop Agent Task

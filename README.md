@@ -22,8 +22,10 @@
 | ![File Tree & Diff](./assets/screenshots/03-file-tree-diff.png) | ![Telemetry](./assets/screenshots/04-telemetry.png) |
 | **API Keys & Free Providers** — gestione centralizzata di 16+ chiavi | **Dev Servers (cmux)** — multiplexer processi di sviluppo in background |
 | ![API Keys](./assets/screenshots/05-api-keys.png) | ![Dev Servers](./assets/screenshots/06-dev-servers.png) |
-| **MCP Servers Hub** — marketplace Model Context Protocol (GitHub, DB, browser, Slack...) | |
-| ![MCP Hub](./assets/screenshots/07-mcp-hub.png) | |
+| **MCP Servers Hub** — marketplace Model Context Protocol (GitHub, DB, browser, Slack...) | **🤖 Loop Agentico Autonomo** — read_file/write_file/run_test multi-step, stile Cursor Agent/Cline |
+| ![MCP Hub](./assets/screenshots/07-mcp-hub.png) | ![Loop Agentico](./assets/screenshots/08-agent-loop.png) |
+| **🖥️ Terminale reale** — esecuzione shell con conferma esplicita, output reale (`exit code`, `stdout`) | **🕐 Checkpoints & Rollback** — cronologia reale delle scritture del Loop Agentico, ripristino passo-per-passo |
+| ![Terminale](./assets/screenshots/09-terminal.png) | ![Checkpoints](./assets/screenshots/10-checkpoints.png) |
 
 ---
 
@@ -91,6 +93,12 @@
 * After a normal chat response finishes streaming, the client scans the completed text for short ```bash/```sh/```shell fenced code blocks the model suggested and adds a real, clickable "▶️ Esegui" button next to each one (skipped for anything longer than 5 lines, to avoid offering to "run" a whole script blindly). Clicking it opens a native `confirm()` dialog showing the exact command before it reaches the terminal endpoint — closing the loop on "the agent can propose a command during the conversation, but only runs it with your confirmation," the way Cursor/Cline/Aider's terminal tool works.
 * Verified live in the browser: a real `echo ... && whoami` typed into the Terminal panel returned the real exit code and real output (including the actual macOS username); a synthetic assistant response containing a ` ```bash\nnpm install lodash\n``` ` block was correctly detected and rendered as a real, clickable suggestion.
 
+#### 12. 🕐 Checkpoints & Rollback for the Agentic Loop (new — closes a real Cline gap)
+* Cline snapshots the workspace before every agent action and lets you roll the whole workspace back to any point in the session — the `/agentloop` above showed a real diff for every write but had no way to undo one. `src/agent/checkpoints.ts` closes that: every real `write_file` inside a loop run is preceded by a real checkpoint, persisted immediately to `<workspace>/.claude/checkpoints/<runId>.json` (survives a dropped connection or crash mid-loop, not just an in-memory list).
+* `/checkpoints` (or the "🕐 Checkpoints" button) lists real past runs for the active workspace, lets you expand any run to see its real per-step writes, and restore to any step: `POST /api/agent/checkpoints/restore` reverts every file touched from that step onward to its exact pre-write content — or deletes it, if that step had created the file from nothing. This is real file I/O (`writeFileSync`/`unlinkSync`), not a simulated undo.
+* Verified with a real fixture (no LLM involved, isolating the rollback logic itself): 3 real writes across 2 files (a modify, a new file, a second modify to the same file) were checkpointed and then correctly rolled back — the modified file returned to its exact original content and the newly-created file was deleted — confirmed both by calling the module directly and via the live HTTP endpoint (with the real local auth token), including confirming the auth gate rejects the same request with no token (`401`).
+* A real bug was found and fixed while building this feature's screenshot: a duplicated CSS `display` property in the generated checkpoint-step list HTML made the list start in an already-"open" state, so the very first click on "Vedi passi" immediately closed (and never populated) it. Caught by trying to screenshot the expanded state and seeing an empty panel — fixed and re-verified with a screenshot showing the real expanded steps and restore buttons.
+
 ### 🗂️ The 7 Studio Tabs
 
 | Tab | What it actually does |
@@ -103,13 +111,14 @@
 | **Dev Servers (cmux)** | Background process multiplexer: launch and stream logs from multiple dev servers (`npm run dev`, `bun dev`, `python app.py`, the Ruflo daemon, etc.) without blocking the chat. |
 | **MCP Servers Hub** | Model Context Protocol marketplace: toggle and configure GitHub, PostgreSQL/Supabase, SQLite/DuckDB, Playwright/Puppeteer, Brave Search, Notion, Linear/Jira, Slack/Discord, Docker, Figma and local AgentDB memory servers, exportable straight to Cursor's or Claude Code's own MCP config. |
 
-### 🚀 The 19 Specialized Slash Commands
+### 🚀 The 20 Specialized Slash Commands
 
 | Slash Command | Role & Specialization |
 | :--- | :--- |
 | **`/swarm <task>`** | Runs the autonomous 3-agent swarm pipeline (Ruflo) |
 | **`/agentloop <goal>`** | Autonomous multi-step loop: reads/writes real files and runs real tests without a prompt per step |
 | **`/terminal`** | Opens a real terminal in the workspace, always requires explicit confirmation before running |
+| **`/checkpoints`** | Review and roll back real per-file checkpoints saved by the agentic loop |
 | **`/diagram <task>`** | Generates visual Mermaid.js architectural diagrams |
 | **`/prd <feature>`** | Creates a comprehensive Product Requirement Document |
 | **`/autofix`** | Autonomous test-and-repair loop on real stack traces |
@@ -201,6 +210,12 @@ Produces `dist/Claude Local Studio.app` and `dist/Claude-Local-Studio-<version>.
 * `/terminal` (o il pulsante "🖥️ Terminale") apre una vera shell nel workspace attivo: `POST /api/workspace/terminal/exec` esegue realmente il comando via `Bun.spawn` e restituisce il vero exit code, stdout e stderr. Ogni esecuzione richiede che tu clicchi tu stesso "▶️ Esegui" — non esiste alcun percorso di esecuzione automatica in questa funzionalità.
 * Dopo che una normale risposta in chat finisce lo streaming, il client analizza il testo completato cercando brevi blocchi di codice ```bash/```sh/```shell suggeriti dal modello e aggiunge un vero pulsante cliccabile "▶️ Esegui" accanto a ciascuno (ignorati quelli più lunghi di 5 righe, per non offrire di "eseguire" alla cieca uno script intero). Cliccandolo si apre una finestra `confirm()` nativa che mostra il comando esatto prima che raggiunga l'endpoint del terminale — chiudendo il cerchio su "l'agente può proporre un comando durante la conversazione, ma lo esegue solo con la tua conferma", esattamente come funziona lo strumento terminale di Cursor/Cline/Aider.
 * Verificato dal vivo nel browser: un vero `echo ... && whoami` digitato nel pannello Terminale ha restituito il vero exit code e il vero output (incluso il reale username macOS); una risposta assistente sintetica contenente un blocco ` ```bash\nnpm install lodash\n``` ` è stata correttamente rilevata e mostrata come suggerimento reale cliccabile.
+
+#### 11. 🕐 Checkpoints & Rollback per il Loop Agentico (nuovo — colma un gap reale rispetto a Cline)
+* Cline salva uno snapshot del workspace prima di ogni azione dell'agente e permette di ripristinare l'intero workspace a un punto qualsiasi della sessione — il `/agentloop` sopra mostrava già un diff reale per ogni scrittura ma non c'era modo di annullarla. `src/agent/checkpoints.ts` colma questo gap: ogni `write_file` reale dentro una run del loop è preceduto da un vero checkpoint, persistito subito su `<workspace>/.claude/checkpoints/<runId>.json` (sopravvive a una connessione interrotta o a un crash a metà loop, non solo a una lista in memoria).
+* `/checkpoints` (o il pulsante "🕐 Checkpoints") elenca le run passate reali per il workspace attivo, permette di espandere qualunque run per vederne le scritture reali passo-per-passo, e di ripristinare a qualunque passo: `POST /api/agent/checkpoints/restore` riporta ogni file toccato da quel passo in poi al suo contenuto esatto pre-scrittura — oppure lo cancella, se quel passo lo aveva creato dal nulla. È vero I/O su file (`writeFileSync`/`unlinkSync`), non un undo simulato.
+* Verificato con una fixture reale (senza LLM, per isolare la sola logica di rollback): 3 scritture reali su 2 file (una modifica, un file nuovo, una seconda modifica sullo stesso file) sono state salvate come checkpoint e poi correttamente ripristinate — il file modificato è tornato al contenuto originale esatto e il file appena creato è stato cancellato — confermato sia chiamando il modulo direttamente sia via il vero endpoint HTTP (con il vero token di autenticazione locale), incluso il controllo che il gate di autenticazione rifiuti la stessa richiesta senza token (`401`).
+* Un bug reale è stato trovato e corretto durante la cattura dello screenshot di questa funzionalità: una proprietà CSS `display` duplicata nell'HTML generato per la lista dei passi faceva partire la lista già "aperta", quindi il primissimo click su "Vedi passi" la chiudeva subito (senza mai popolarla). Scoperto provando a catturare lo stato espanso e trovando un pannello vuoto — corretto e riverificato con uno screenshot che mostra i passi realmente espansi e i pulsanti di ripristino.
 
 ### 🗂️ Le 7 Tab dello Studio
 

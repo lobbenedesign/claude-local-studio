@@ -16,6 +16,7 @@ import * as Diff from "diff";
 import { handleAnthropicProxy } from "../providers/dispatch";
 import { buildAstRepoMap } from "../workspace/repo-map";
 import { saveProjectInsight } from "../workspace/memory";
+import { createRun, recordCheckpoint } from "./checkpoints";
 import type { AgentRunContext } from "./run";
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -40,7 +41,10 @@ export async function handleAgentAutonomousLoop(req: Request, runCtx: AgentRunCo
         (async () => {
           const write = async (text: string) => { try { await writer.write(encoder.encode(text)); } catch {} };
 
-          await write(`\n🤖 [LOOP AGENTICO AUTONOMO AVVIATO] — max ${maxSteps} passi\n════════════════════════════════════════════════════════════════\nObiettivo: ${task}\n`);
+          const runId = crypto.randomUUID();
+          const checkpointRun = createRun(workspace, runId, task);
+
+          await write(`\n🤖 [LOOP AGENTICO AUTONOMO AVVIATO] — max ${maxSteps} passi — run: ${runId}\n════════════════════════════════════════════════════════════════\nObiettivo: ${task}\n`);
 
           const repoMap = buildAstRepoMap(workspace);
           const actionHistory: string[] = [];
@@ -160,13 +164,17 @@ ${actionHistory.slice(-8).join("\n\n") || "(nessuna azione ancora, questo è il 
                 continue;
               }
               try {
-                const oldContent = existsSync(absPath) ? readFileSync(absPath, "utf-8") : "";
+                const hadExisted = existsSync(absPath);
+                const oldContent = hadExisted ? readFileSync(absPath, "utf-8") : "";
+                // Checkpoint REALE prima di scrivere: persiste subito su disco, non
+                // solo a fine loop, così sopravvive anche a un'interruzione a metà.
+                recordCheckpoint(checkpointRun, step, relPath, hadExisted, oldContent);
                 const patch = Diff.createTwoFilesPatch(relPath, relPath, oldContent, newContent, "prima", "dopo");
                 const parentDir = dirname(absPath);
                 if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
                 writeFileSync(absPath, newContent, "utf-8");
                 filesWritten++;
-                await write(`✏️ write_file(${relPath}) — scritto realmente su disco (${newContent.length} byte)\n${patch.split("\n").slice(0, 25).join("\n")}\n`);
+                await write(`✏️ write_file(${relPath}) — scritto realmente su disco (${newContent.length} byte) [checkpoint step ${step} salvato, ripristinabile da "🕐 Checkpoints" con run ${runId}]\n${patch.split("\n").slice(0, 25).join("\n")}\n`);
                 actionHistory.push(`[Passo ${step}] write_file(${relPath}): scritto realmente (${newContent.length} byte). Motivo: ${actionObj.reason || "(non specificato)"}`);
               } catch (e: any) {
                 await write(`✏️ write_file(${relPath}) fallita: ${e.message}\n`);
@@ -205,11 +213,11 @@ ${actionHistory.slice(-8).join("\n\n") || "(nessuna azione ancora, questo è il 
           await saveProjectInsight(
             workspace,
             task.slice(0, 35),
-            `Loop agentico autonomo eseguito (${filesWritten} file scritti realmente sul disco). Terminato perché: ${stopReason}.`,
+            `Loop agentico autonomo eseguito (${filesWritten} file scritti realmente sul disco, run ${runId}). Terminato perché: ${stopReason}.`,
             ["autonomous-loop"]
           );
 
-          await write(`\n════════════════════════════════════════════════════════════════\n🏁 [LOOP TERMINATO] ${stopReason} — file scritti realmente: ${filesWritten}\n`);
+          await write(`\n════════════════════════════════════════════════════════════════\n🏁 [LOOP TERMINATO] ${stopReason} — file scritti realmente: ${filesWritten}${filesWritten > 0 ? `\n🕐 Per annullare queste modifiche apri "Checkpoints" e ripristina la run ${runId}.` : ""}\n`);
           try { await writer.close(); } catch {}
         })();
 
