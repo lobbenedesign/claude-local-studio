@@ -20,6 +20,10 @@ import {
 } from "./openai-compat";
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
+// Same default port (8080) as the mlx/llamacpp route below — LocalAI's own
+// default. Set LOCALAI_HOST if running both a raw llama.cpp/MLX server and
+// LocalAI locally at the same time.
+const LOCALAI_HOST = process.env.LOCALAI_HOST || "http://localhost:8080";
 
 export interface ProviderApiKeys {
   geminiApiKey: string;
@@ -158,6 +162,18 @@ export async function handleAnthropicProxy(req: Request, activeModel: string, ke
     if (modelToUse.startsWith("vllm/")) {
       const realModelId = modelToUse.replace(/^vllm\//i, "");
       return handleOpenAICompatibleStream("http://localhost:8000/v1/chat/completions", "vllm", realModelId, body);
+    }
+
+    // 0l2. ROUTE TO LOCAL LOCALAI SERVER (Port 8080 by default, see LOCALAI_HOST above)
+    // LocalAI (github.com/mudler/LocalAI) fronts 60+ inference backends
+    // (llama.cpp, vLLM, MLX, exllama, ...) behind one OpenAI-compatible API,
+    // so this single route reaches all of them without a dedicated adapter
+    // per backend, the same way the mlx/llamacpp/vllm routes above each
+    // reach exactly one. LocalAI doesn't validate the API key by default,
+    // so any placeholder works.
+    if (modelToUse.startsWith("localai/")) {
+      const realModelId = modelToUse.replace(/^localai\//i, "");
+      return handleOpenAICompatibleStream(`${LOCALAI_HOST}/v1/chat/completions`, "sk-localai", realModelId, body);
     }
 
     // 0m. ROUTE TO CUSTOM ENDPOINT (Inception Labs / Private LLMs)

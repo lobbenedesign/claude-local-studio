@@ -404,6 +404,31 @@ const server = Bun.serve({
             }
           } catch {}
 
+          // 1d. Probe LocalAI (8080 by default — set LOCALAI_HOST if that
+          // collides with the MLX/llama.cpp server above; both speak the
+          // same OpenAI-compatible /v1/models). LocalAI fronts 60+
+          // inference backends behind one API, so this single probe can
+          // surface many more real local models than the single-backend
+          // probes around it.
+          try {
+            const localaiHost = process.env.LOCALAI_HOST || "http://localhost:8080";
+            const laRes = await fetch(`${localaiHost}/v1/models`, { signal: AbortSignal.timeout(600) }).catch(() => null);
+            if (laRes && laRes.ok) {
+              const laData: any = await laRes.json();
+              if (laData.data && Array.isArray(laData.data)) {
+                for (const m of laData.data) {
+                  localModels.push({
+                    name: `localai/${m.id}`,
+                    displayName: `LocalAI: ${m.id}`,
+                    size: 0,
+                    details: { parameter_size: "LocalAI", quantization_level: "Multi-backend" },
+                    engine: "LocalAI"
+                  });
+                }
+              }
+            }
+          } catch {}
+
           // 1e. Probe EXO Distributed Cluster (52415)
           try {
             const exoRes = await fetch("http://localhost:52415/v1/models", { signal: AbortSignal.timeout(600) }).catch(() => null);

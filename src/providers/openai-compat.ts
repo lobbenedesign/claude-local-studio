@@ -67,16 +67,28 @@ export async function handleOpenAICompatibleStream(endpoint: string, apiKey: str
     }));
   }
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-      "HTTP-Referer": "http://localhost:3001",
-      "X-Title": "Custom Claude Coder"
-    },
-    body: JSON.stringify(openaiPayload)
-  });
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "http://localhost:3001",
+        "X-Title": "Custom Claude Coder"
+      },
+      body: JSON.stringify(openaiPayload)
+    });
+  } catch (e: any) {
+    // Network-level failure (endpoint unreachable, DNS, connection refused —
+    // e.g. a local engine like LocalAI/MLX/vLLM that isn't running). Without
+    // this, the uncaught fetch rejection surfaced as Bun's raw HTML dev
+    // error page instead of an honest JSON error the UI can render.
+    return new Response(
+      JSON.stringify({ error: { type: "connection_error", message: `Impossibile contattare ${endpoint}: ${e.message}` } }),
+      { status: 502, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }
+    );
+  }
 
   if (!res.ok) {
     const errText = await res.text();
